@@ -1,0 +1,1451 @@
+---
+  title: "03_differential_expression_visualisation"
+#output: html_notebook
+---
+
+Visualisation of the differential expression output for all treatment arms
+# Contents
+
+1.  Volcano Plots
+2.  Top enriched process barplots
+3.  GO bubble plots
+4.  Immune pathway heatmap
+5.  Enriched process overlap between treatments
+6.  Unique and shared DEGs - venn and bubbleplot
+
+## Load libraries
+
+```{r message=FALSE}
+# Packages to load
+packages <- c(
+ "ComplexUpset","cowplot", "EnhancedVolcano","forcats","ggnewscale","ggplot2", "ggrepel", "ggvenn", "grid", 
+ "gridExtra", "patchwork", "pheatmap", "scales", "stringr", "tidyverse")
+
+
+############################################################################################################
+load_libraries <- function(packages) {
+  for (package in packages) {
+    if (!require(package, character.only = TRUE)) {
+      install.packages(package)
+      library(package, character.only = TRUE)
+    }
+  }
+}
+
+# Load all packages
+load_libraries(packages)
+
+```
+
+# 1. Volcano Plots
+
+For these plots, need to read in the differential expression files containing the logfc and pval for each treatment arm which were generated and saved within the differential expression notebooks
+
+```{r fig.width=6, fig.height=15}
+
+volcano_data<-read.table("Standard_of_Care_Day5_vs_Day1_results.txt", sep="\t", header = TRUE, row.names=1)
+
+# create custom key-value pairs for fold-change expression
+# Define and initialize keyvals as an empty list or vector
+keyvals <- vector()
+#modify keyvals to show colour the specific genes with your foldchange of interest
+# modify keyvals for variables with fold change > 2
+keyvals[which(volcano_data$logFC > 0)] <- 'firebrick2'
+names(keyvals)[which(volcano_data$logFC > 0)] <- 'Upregulated'
+# modify keyvals for variables with fold change < -2
+keyvals[which(volcano_data$logFC < 0)] <- 'royalblue'
+names(keyvals)[which(volcano_data$logFC < 0)] <- 'Downregulated'
+#modify keyvals for non sig genes
+keyvals[which(volcano_data$FDR >0.05)] <- 'grey'
+names(keyvals)[which(volcano_data$FDR >0.05)] <- 'NS'
+#for title of plot
+soc_volcano_plot<- EnhancedVolcano(volcano_data,
+                               lab=NA,  #rownames(volcano_data),
+                               #selectLab = c('FABP4','IL1B', 'HIF1A'),
+                               xlim=c(-5,5), #may need to change this to fit all points on
+                              ylim=c(0, 10), #may need to change this to fit all points on
+                               x='logFC',
+                               y='FDR',
+                               title = "Standard of Care",
+                               titleLabSize =20,
+                               subtitle = NULL, #turn off subtitle
+                               pCutoff= 0.05, #SET LINES TO SHOW FDR PVAL OF CHOICE
+                               FCcutoff=0, #SET LINES TO SHOW FC CUTOFF OF CHOICE
+                               colCustom = keyvals,
+                               pointSize=3,
+                               #legendLabSize = 10,
+                               gridlines.major = FALSE,
+                               gridlines.minor=FALSE,
+                               legendPosition = "none")
+
+# Calculate the number of upregulated and downregulated genes
+num_upregulated <- sum(volcano_data$logFC > 0 & !is.na(volcano_data$logFC) & !is.na(volcano_data$FDR) & volcano_data$FDR < 0.05)
+num_downregulated <- sum(volcano_data$logFC < 0 & !is.na(volcano_data$logFC) & !is.na(volcano_data$FDR) & volcano_data$FDR < 0.05)
+# Add labels above the plot
+
+soc_plot<-soc_volcano_plot + geom_text(aes(x = Inf, y = Inf, label = paste("Upregulated: ", num_upregulated)), size=4, colour = "darkred", hjust = 1.25, vjust = 1, family = "sans") +
+  geom_text(aes(x = -Inf, y = Inf, label = paste("Downregulated: ", num_downregulated)), size=4, colour = "navy",hjust = -0.15, vjust = 1, family = "sans")
+
+
+###### Bemcenitnib #####
+
+## volcano plots ###
+#need the LFC  here for the comparison you want to plot
+bem_volcano_data<-read.table("Bemcentinib_Day5_vs_Day1_results.txt", sep="\t", header = TRUE, row.names=1)
+# create custom key-value pairs for fold-change expression
+# Define and initialize keyvals as an empty list or vector
+keyvals <- vector()
+#modify keyvals to show colour the specific genes with your foldchange of interest
+# modify keyvals for variables with fold change > 2
+keyvals[which(bem_volcano_data$logFC > 0)] <- 'firebrick2'
+names(keyvals)[which(bem_volcano_data$logFC > 0)] <- 'Upregulated'
+# modify keyvals for variables with fold change < -2
+keyvals[which(bem_volcano_data$logFC < 0)] <- 'royalblue'
+names(keyvals)[which(bem_volcano_data$logFC < 0)] <- 'Downregulated'
+#modify keyvals for non sig genes
+keyvals[which(bem_volcano_data$FDR >0.05)] <- 'grey'
+names(keyvals)[which(bem_volcano_data$FDR >0.05)] <- 'NS'
+ #for title of plot
+bem_volcano_plot<- EnhancedVolcano(bem_volcano_data,
+                               lab=NA,  #rownames(volcano_data),
+                               #selectLab = c('FABP4','IL1B', 'HIF1A'),
+                               xlim=c(-10,10), #may need to change this to fit all points on
+                               ylim=c(0, 20), #may need to change this to fit all points on
+                               x='logFC',
+                               y='FDR',
+                               title = "Bemcentinib",
+                               titleLabSize =20,
+                               subtitle = NULL, #turn off subtitle
+                               pCutoff= 0.05, #SET LINES TO SHOW FDR PVAL OF CHOICE
+                               FCcutoff=0, #SET LINES TO SHOW FC CUTOFF OF CHOICE
+                               colCustom = keyvals,
+                               pointSize=3,
+                               #legendLabSize = 10,
+                               gridlines.major = FALSE,
+                               gridlines.minor=FALSE,
+                               legendPosition = "none")
+# Calculate the number of upregulated and downregulated genes
+bem_num_upregulated <- sum(bem_volcano_data$logFC > 0 & !is.na(bem_volcano_data$logFC) & 
+                             !is.na(bem_volcano_data$FDR) & bem_volcano_data$FDR < 0.05)
+bem_num_downregulated <- sum(bem_volcano_data$logFC < 0 & !is.na(bem_volcano_data$logFC) & 
+                               !is.na(bem_volcano_data$FDR) & bem_volcano_data$FDR < 0.05)
+final_bem<-bem_volcano_plot + geom_text(aes(x = Inf, y = Inf, label = paste("Upregulated: ", bem_num_upregulated)), size=4, colour = "darkred", hjust = 1.25, vjust = 1, family = "sans") +
+  geom_text(aes(x = -Inf, y = Inf, label = paste("Downregulated: ", bem_num_downregulated)), size=4, colour = "navy",hjust = -0.15, vjust = 1, family = "sans")
+
+
+###### Tozorakimab #####
+
+## volcano plots ###
+#need the LFC  here for the comparison you want to plot
+toz_volcano_data<-read.table("Tozorakimab_Day5_vs_Day1_results.txt", sep="\t", header = TRUE, row.names=1)
+# create custom key-value pairs for fold-change expression
+# Define and initialize keyvals as an empty list or vector
+keyvals <- vector()
+#modify keyvals to show colour the specific genes with your foldchange of interest
+# modify keyvals for variables with fold change > 2
+keyvals[which(toz_volcano_data$logFC > 0)] <- 'firebrick2'
+names(keyvals)[which(toz_volcano_data$logFC > 0)] <- 'Upregulated'
+# modify keyvals for variables with fold change < -2
+keyvals[which(toz_volcano_data$logFC < 0)] <- 'royalblue'
+names(keyvals)[which(toz_volcano_data$logFC < 0)] <- 'Downregulated'
+#modify keyvals for non sig genes
+keyvals[which(toz_volcano_data$FDR >0.05)] <- 'grey'
+names(keyvals)[which(toz_volcano_data$FDR >0.05)] <- 'NS'
+#for title of plot
+toz_volcano_plot<- EnhancedVolcano(toz_volcano_data,
+                               lab=NA,  #rownames(volcano_data),
+                               #selectLab = c('FABP4','IL1B', 'HIF1A'),
+                               xlim=c(-5,5), #may need to change this to fit all points on
+                               ylim=c(0, 30), #may need to change this to fit all points on
+                               x='logFC',
+                               y='FDR',
+                               title = "Tozorakimab",
+                               titleLabSize =20,
+                               subtitle = NULL, #turn off subtitle
+                               pCutoff= 0.05, #SET LINES TO SHOW FDR PVAL OF CHOICE
+                               FCcutoff=0, #SET LINES TO SHOW FC CUTOFF OF CHOICE
+                               colCustom = keyvals,
+                               pointSize=3,
+                               #legendLabSize = 10,
+                               gridlines.major = FALSE,
+                               gridlines.minor=FALSE,
+                               legendPosition = "none")
+
+# Calculate the number of upregulated and downregulated genes
+toz_num_upregulated <- sum(toz_volcano_data$logFC > 0 & !is.na(toz_volcano_data$logFC) & 
+                         !is.na(toz_volcano_data$FDR) & toz_volcano_data$FDR < 0.05)
+toz_num_downregulated <- sum(toz_volcano_data$logFC < 0 & !is.na(toz_volcano_data$logFC) & 
+                           !is.na(toz_volcano_data$FDR) & toz_volcano_data$FDR < 0.05)
+
+final_toz<-toz_volcano_plot + 
+  geom_text(aes(x = Inf, y = Inf, label = paste("Upregulated: ", toz_num_upregulated)), size=4, colour = "darkred", hjust = 1.25, vjust = 1, family = "sans") +
+  geom_text(aes(x = -Inf, y = Inf, label = paste("Downregulated: ", toz_num_downregulated)), size=4, colour = "navy", hjust = -0.15, vjust = 1, family = "sans")
+
+
+#### Zilucoplan ######
+
+## volcano plots ###
+#need the LFC  here for the comparison you want to plot
+zil_volcano_data<-read.table("Zilucoplan_Day5_vs_Day1_results.txt", sep="\t", header = TRUE, row.names=1)
+# create custom key-value pairs for fold-change expression
+# Define and initialize keyvals as an empty list or vector
+keyvals <- vector()
+#modify keyvals to show colour the specific genes with your foldchange of interest
+# modify keyvals for variables with fold change > 2
+keyvals[which(zil_volcano_data$logFC > 0)] <- 'firebrick2'
+names(keyvals)[which(zil_volcano_data$logFC > 0)] <- 'Upregulated'
+# modify keyvals for variables with fold change < -2
+keyvals[which(zil_volcano_data$logFC < 0)] <- 'royalblue'
+names(keyvals)[which(zil_volcano_data$logFC < 0)] <- 'Downregulated'
+#modify keyvals for non sig genes
+keyvals[which(zil_volcano_data$FDR >0.05)] <- 'grey'
+names(keyvals)[which(zil_volcano_data$FDR >0.05)] <- 'NS'
+#for title of plot
+zil_volcano_plot<- EnhancedVolcano(zil_volcano_data,
+                               lab=NA,  #rownames(volcano_data),
+                               #selectLab = c('FABP4','IL1B', 'HIF1A'),
+                               xlim=c(-5,5), #may need to change this to fit all points on
+                               ylim=c(0, 5), #may need to change this to fit all points on
+                               x='logFC',
+                               y='FDR',
+                               title = "Zilucoplan",
+                               titleLabSize =20,
+                               subtitle = NULL, #turn off subtitle
+                               pCutoff= 0.05, #SET LINES TO SHOW FDR PVAL OF CHOICE
+                               FCcutoff=0, #SET LINES TO SHOW FC CUTOFF OF CHOICE
+                               colCustom = keyvals,
+                               pointSize=3,
+                               #legendLabSize = 10,
+                               gridlines.major = FALSE,
+                               gridlines.minor=FALSE,
+                               legendPosition = "none")
+
+
+# Calculate the number of upregulated and downregulated genes
+zil_num_upregulated <- sum(zil_volcano_data$logFC > 0 & !is.na(zil_volcano_data$logFC) & 
+                         !is.na(zil_volcano_data$FDR) & zil_volcano_data$FDR < 0.05)
+zil_num_downregulated <- sum(zil_volcano_data$logFC < 0 & !is.na(zil_volcano_data$logFC) & 
+                           !is.na(zil_volcano_data$FDR) & zil_volcano_data$FDR < 0.05)
+
+final_zil<- zil_volcano_plot + geom_text(aes(x = Inf, y = Inf, label = paste("Upregulated: ", zil_num_upregulated)), size=4, colour = "darkred", hjust = 1.5, vjust = 1, family = "sans") +
+  geom_text(aes(x = -Inf, y = Inf, label = paste("Downregulated: ", zil_num_downregulated)), size=4, colour = "navy", hjust = -0.3, vjust = 1, family = "sans")
+
+#combined plots
+plot_grid(final_bem, final_toz, final_zil, nrow =3)
+
+
+```
+
+# 2. Top enriched process barplots
+
+Plotting top enriched Biological Processes. This uses the enrichment_results.csv output from the clusterprofiler enrichment analysis.
+
+```{r fig.width = 15, fig.height = 10}
+SoC_upregulated<-read.csv("Standard_of_Care_Day5_vs_Day1_BP_upregulated_enrichment_results.csv", header=TRUE)
+colnames(SoC_upregulated)
+SoC_downregulated<-read.csv("Standard_of_Care_Day5_vs_Day1_BP_downregulated_enrichment_results.csv", header=TRUE)
+#create combo column
+SoC_upregulated$GO_ID <- paste(SoC_upregulated$ID, SoC_upregulated$Description, sep= " ")
+SoC_downregulated$GO_ID <- paste(SoC_downregulated$ID, SoC_downregulated$Description, sep= " ")
+
+#BARPLOT for UP
+ggplot(SoC_upregulated, aes(x=Count, y=reorder(GO_ID, -qvalue), fill=qvalue))+
+  ggtitle("Top 10 enriched upregulated BP pathways for SoC")+
+  theme_bw(base_size = 20)+
+  geom_bar(stat='identity', color="black")+
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 5))+ 
+  scale_fill_distiller(palette = "Blues", name="FDR")+ #set colour schemes using viridis OR
+  scale_y_discrete(labels = wrap_format(60), expand = c(0, 0))+ #this changes if the label axis is shorter/longer by putting on more lines
+  xlab("Gene Count")+
+  theme(axis.title.y = element_blank())+  # Remove the Y-axis title
+  theme(panel.grid.minor = element_blank(), panel.grid.major = element_blank())
+
+
+#BARPLOT for down
+ggplot(SoC_downregulated[1:10, ], aes(x=Count, y=reorder(GO_ID, -qvalue), fill=qvalue))+
+  ggtitle("Top 10 enriched downregulated BP pathways for SoC")+
+  theme_bw(base_size = 20)+
+  geom_bar(stat='identity', color="black")+
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 15))+ 
+  scale_fill_distiller(palette = "Blues", name="FDR")+ #set colour schemes using viridis OR
+  scale_y_discrete(labels = wrap_format(60), expand = c(0, 0))+ #this changes if the label axis is shorter/longer by putting on more lines
+  xlab("Gene Count")+
+  theme(axis.title.y = element_blank())+  # Remove the Y-axis title
+  theme(panel.grid.minor = element_blank(), panel.grid.major = element_blank())
+  
+
+```
+
+# 3.  GO bubble plots
+
+The output of the BP enrichment analysis for each treatment arm downregulated and upregulated genes were saved as csv in the 03_differential_expression_treatmentarm notebook. 
+
+These files were input to Cytoscape for further visualisation using the EnrichmentMap plugin. Identified clusters were annotated using AutoAnnotate, followed by manual curation of the cluster names.
+
+Original GO files were used to get mapping aesthetics (e.g. gene count) for the summarised categories
+
+For this - need to create Rdata file containing the cluster analysis output from cytoscape code in "C:/Users/ja2y21/OneDrive - University of Southampton/PostDoc/Projects/EME COVID/Data/Analysis/4_Nested/Results/DE/GO_Comparison/ACCORD_GO_BubblePlot.R"
+
+Load data
+.Rdata file contains:
+- the BP enrichment output for each of the treatment arms for up or downregulated genes
+- the EnrichmentMap and autoannotate clusters saved from cytoscape (down_cluster_data or up_cluster_data)
+- manually annotated cluster mapping (up_annot and down_annot). includes the higher level broad categories grouping similar cluster terms for plotting 
+
+
+```{r}
+# Read in  data
+load("enrichment_analysis_ouptut_plotting_data.Rdata")
+```
+
+Set colours for the plot
+
+```{r}
+
+# Color vector for treatments, outcomes, and expressions
+new_colors <- c("Bemcentinib" = "forestgreen",  # Forest Green for Bemcentinib
+                "Tozorakimab" = "gold",        # Gold for Tozorakimab
+                "Zilucoplan" = "coral",        # Coral for Zilucoplan
+                
+                "Downregulated" = "navy",
+                "Upregulated" = "darkred",
+                
+                # Color palette for the terms (using ggplot2-friendly colors)
+                "Immune cell activation" = "#D32F2F",            # Red
+                "Immune response regulation" = "#66cc66",  # Blue
+                "Inflammatory mediator signalling" = "#2196F3", #green 
+                "Viral life cycle" = "#9C27B0",                   # Purple
+                "Protein regulation" = "#FF5722",                 # Deep Orange
+                "Gene expression regulation" = "#F57C00",        # Orange
+                "Cellular signalling" = "#4CAF50",                 # Green
+                "Antiviral immune response" = "#8E24AA",          # Magenta
+                "Inflammatory mediator signalling" = "#9E9E9E",   # Grey
+                "Coagulation and platelet activation" = "#0288D1", # Blue
+                "Apoptosis" = "#FFCC00",                          # Amber
+                "Complement" = "#673AB7",                         # Deep Purple
+                "Oxidative stress" = "#E91E63",                   # Pink
+                "Autophagy" = "#0288D1",                          # Light Blue
+                "Molecular process" = "#3F51B5",                  # Indigo
+                "Antibacterial response" = "#CDDC39",             # Lime
+                "Cellular response" = "#FF5722",                  # Deep Orange
+                "Antiviral response" = "#FF9800",                 # Yellow
+                "Metabolic process" = "#8BC34A",  # Light Green
+                "Cellular process" = "#00Cc00",
+                "Ribosomal process" = "brown")
+
+```
+
+Merge new cluster data with the original enrichment files 
+First downregulated enrichment:
+
+```{r}
+# Transform the data
+down_transformed_data <- down_cluster_data %>%
+  # Select relevant columns
+  select(
+    id = `EnrichmentMap..Name`,
+    term = `EnrichmentMap..GS_DESCR`,
+    gene_count = `EnrichmentMap..gs_size`,
+    cluster = X__mclCluster,
+    bem_NES = `EnrichmentMap..NES..bem.down.`,
+    toz_NES = `EnrichmentMap..NES..toz.down.`,
+    zil_NES = `EnrichmentMap..NES..zil.down.`,
+    bem_fdr = `EnrichmentMap..fdr_qvalue..bem.down.`,
+    toz_fdr = `EnrichmentMap..fdr_qvalue..toz.down.`,
+    zil_fdr = `EnrichmentMap..fdr_qvalue..zil.down.`
+  ) %>%
+  # Pivot longer to reshape NES and fdr values
+  pivot_longer(
+    cols = starts_with("bem") | starts_with("toz") | starts_with("zil"), # Only reshape treatment-related columns
+    names_to = c("treatment", ".value"),
+    names_sep = "_"
+  ) %>%
+  # Filter rows with valid NES values (non-NA)
+  filter(!is.na(NES)) %>%
+  # Organize columns
+  select(id, term, gene_count, cluster, treatment, NES, fdr)
+
+
+#use the gene count column fro the original GO enrichment files for plotting - e.g. size of bubbles for gene counts
+# Combine all treatment BP data frames into one
+all_BP_down <- bind_rows(bem_BP_down, toz_BP_down, zil_BP_down) %>%
+  select(id = ID, treatment, Count)  # Select necessary columns and rename for consistency
+# Update gene_count in transformed_data based on all_BP
+down_transformed_data <- down_transformed_data %>%
+  left_join(all_BP_down, by = c("id", "treatment")) %>%  # Join on id and treatment
+  mutate(gene_count = ifelse(!is.na(Count), Count, gene_count)) %>%  # Replace gene_count if Count is available
+  select(-Count)  # Remove Count column after updating
+
+
+#merge with manually annotated term file "down_annot" to use the higher level GO categories for plotting
+down_merge_annot<-merge(down_transformed_data, down_annot, by.x="cluster", by.y = "cluster_n")
+# Find unmatched clusters in transformed_data
+down_unmatched_clusters <- setdiff(down_transformed_data$cluster, down_annot$cluster_n)
+# these were not manually annotated as they were removed from the newtowrk plot on inspection due to forming singleton clusters
+
+#Set plotting aesthetics
+# Ensure `term` is ordered by `parent_term`, removing duplicates
+down_merge_annot_ordered <- down_merge_annot %>%
+  mutate(term = factor(term, levels = unique(term[order(parent_term)])))
+#log fdr, better for plotting visualisation
+down_merge_annot_ordered <- down_merge_annot_ordered %>%
+  mutate(log10_fdr = log10(fdr), log2_fdr=log2(fdr))  # Create log10-transformed fdr column
+#change treatment names
+down_merge_annot_ordered <- down_merge_annot_ordered %>%
+  mutate(treatment = case_when(
+    treatment == "bem" ~ "Bemcentinib",  # Corrected syntax for condition and result
+    treatment == "toz" ~ "Tozorakimab",  # Same here
+    treatment == "zil" ~ "Zilucoplan",   # Same here
+    TRUE ~ treatment  # This keeps the other treatments unchanged
+  ))
+
+```
+
+Now for the upregulated enrichment:
+
+```{r}
+# Transform the upregulated data (similar to how you transformed the downregulated data)
+up_transformed_data <- up_cluster_data %>%
+  # Select relevant columns and make the necessary adjustments for upregulated data
+  select(
+    id = `EnrichmentMap..Name`,
+    term = `EnrichmentMap..GS_DESCR`,
+    gene_count = `EnrichmentMap..gs_size`,
+    cluster = X__mclCluster,
+    bem_NES = `EnrichmentMap..NES..Bemcentinib.`,
+    toz_NES = `EnrichmentMap..NES..Tozorakimab.`,
+    zil_NES = `EnrichmentMap..NES..Zilucoplan.`,
+    bem_fdr = `EnrichmentMap..fdr_qvalue..Bemcentinib.`,
+    toz_fdr = `EnrichmentMap..fdr_qvalue..Tozorakimab.`,
+    zil_fdr = `EnrichmentMap..fdr_qvalue..Zilucoplan.`
+  ) %>%
+  # Pivot longer to reshape NES and fdr values
+  pivot_longer(
+    cols = starts_with("bem") | starts_with("toz") | starts_with("zil"), 
+    names_to = c("treatment", ".value"),
+    names_sep = "_"
+  ) %>%
+  # Filter rows with valid NES values (non-NA)
+  filter(!is.na(NES)) %>%
+  # Organize columns
+  select(id, term, gene_count, cluster, treatment, NES, fdr)
+
+# Combine all upregulated BP data frames into one
+all_up_BP <- bind_rows(bem_BP_up, toz_BP_up, zil_BP_up) %>%
+  select(id = ID, treatment, Count)  # Select necessary columns and rename for consistency
+
+# Update gene_count in transformed_up_data based on all_up_BP
+up_transformed_data <- up_transformed_data %>%
+  left_join(all_up_BP, by = c("id", "treatment")) %>%  # Join on id and treatment
+  mutate(gene_count = ifelse(!is.na(Count), Count, gene_count)) %>%  # Replace gene_count if Count is available
+  select(-Count)  # Remove Count column after updating
+
+# Merge the transformed upregulated data with the manual annotations "up_annot"
+up_merge_annot <- merge(up_transformed_data, up_annot, by.x = "cluster", by.y = "cluster_n")
+
+# Find unmatched clusters in transformed_up_data
+
+# Ensure `term` is ordered by `parent_term`, removing duplicates
+up_merge_annot_ordered <- up_merge_annot %>%
+  mutate(term = factor(term, levels = unique(term[order(parent_term)])))
+
+# Create log transformed fdr column for upregulated data for plotting 
+up_merge_annot_ordered <- up_merge_annot_ordered %>%
+  mutate(log10_fdr = log10(fdr), log2_fdr=log2(fdr)) 
+
+# Change treatment names for upregulated data
+up_merge_annot_ordered <- up_merge_annot_ordered %>%
+  mutate(treatment = case_when(
+    treatment == "bem" ~ "Bemcentinib",  # Corrected syntax for condition and result
+    treatment == "toz" ~ "Tozorakimab",  # Same here
+    treatment == "zil" ~ "Zilucoplan",   # Same here
+    TRUE ~ treatment  # This keeps the other treatments unchanged
+  ))
+
+```
+
+
+Now plot both as a combined plot
+
+```{r}
+## Plot on same axis -----------
+# Create regulation indicator for up and downregulated terms
+down_merge_annot_ordered <- down_merge_annot_ordered %>%
+  mutate(regulation = "Downregulated")
+up_merge_annot_ordered <- up_merge_annot_ordered %>%
+  mutate(regulation = "Upregulated",
+         log10_fdr = -log10(fdr),
+         log2_fdr = -log2(fdr))  # No need to change the log10_fdr for upregulated terms
+
+# Combine both data frames (upregulated and downregulated)
+combined_data <- bind_rows(down_merge_annot_ordered, up_merge_annot_ordered)
+
+# Custom function to format the y-axis labels as absolute values so they are shown as the same (log10 values)
+#as oposed to the plotted values which have been signed to help plot above and below the axis
+custom_y_labels <- function(x) {
+  # Flip the sign of the y-axis labels and display them as absolute values
+  abs_labels <- abs(x)  # Take the absolute value
+  return(abs_labels)  # Return the modified labels
+}
+
+top_terms <- combined_data %>%
+  group_by(treatment) %>%
+  # For downregulated (lowest FDR values)
+  arrange(treatment, log2_fdr) %>%
+  slice_head(n = 5) %>%
+  # For upregulated (highest FDR values)
+  bind_rows(
+    combined_data %>%
+      group_by(treatment) %>%
+      arrange(treatment, desc(log2_fdr)) %>%
+      slice_head(n = 5)
+  )
+## Wrap the long labels in the 'term' column of the top_terms dataset
+top_terms$term_wrapped <- str_wrap(top_terms$term, width = 25)  # Adjust 'width' to control line length
+
+```
+
+
+
+
+```{r fig.height= 10, fig.width=12}
+ggplot(combined_data, aes(x = parent_term, y = log2_fdr, size = gene_count, color = parent_term)) +
+  geom_jitter(alpha = 0.4, width = 0.5, height = 0) +  # Add jitter on the x-axis only
+  scale_y_continuous(name = "log2 GO Enrichment FDR", limits = c(-200, 200), labels = custom_y_labels) +  # Adjust y-axis for FDR
+  scale_size_continuous(name = "Gene Count", range = c(1, 10)) +  # Size legend
+  scale_color_manual(name = "GO category", values = new_colors) + # Color legend
+  theme_bw(base_size=14) +  # Use a clean theme
+  theme(
+    strip.text = element_text(size = 16),  # Adjust font size here
+    axis.title.x = element_blank(),  # Remove x-axis title
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),  # Remove x-axis ticks
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "right",  # Place legend on the right
+  #  legend.box = "horizontal",  # Place legend items horizontally
+  #  plot.title = element_blank(),  # Turn off the plot title
+    legend.key.size = unit(1, "lines"),  # Control the size of legend keys (symbol size)
+    legend.text = element_text(size = 10),  # Adjust the size of legend text
+    legend.spacing.x = unit(0.1, "cm"),  # Space between legend items
+    legend.margin = margin(t = 0)  # Adjust top margin to fit it properly
+  ) +
+  labs(title = "Upregulated and Downregulated GO Terms") +
+  facet_wrap(~ treatment, nrow = 3) +  # Separate up and down regulated terms
+  geom_hline(yintercept = 0, color = "black") +  # Add a black horizontal line for the new y-axis
+  # Add labels for the top 5 up and downregulated terms with ggrepel to avoid overlap
+  geom_label_repel(
+    data = top_terms,
+    aes(label = term_wrapped), 
+    size = 3, color = "black", 
+    box.padding = 0.5, point.padding = 0.2,  # Add padding around the label and point
+    min.segment.length = 0.5,  # Minimum length of the line connecting the label to the point
+    max.overlaps = Inf, # Prevent overlapping of labels
+    segment.color = "black", # Color of the segment lines
+    force = 1000,  # Apply a force to help avoid overlap
+    position = position_jitter(width = 0.5, height = 0),  # Ensure jittered positions for the labels
+    show.legend = FALSE  # Hide labels from the legend
+  ) +
+  guides(
+    color = guide_legend(override.aes = list(size = 3), ncol=1)  # Increase dot size for color legend
+  )
+
+```
+
+# 4.  Immune pathway heatmap
+
+Now using the specific immune related pathways in the manually annotated cluster file to visualise the expression of these indiviual immune processes uisng the logfc of genes assigned to the immune processes. We are using the up/down_merge_annot_ordered df created in (3) to merge with the specific genes identified in each go term. The logfc of all the genes in the go terms within a single specific_immune_term will then be summarised for heatmap plotting. 
+
+
+
+Downregulated
+```{r}
+#Bemcentinib
+#select only the genes/name and their logfc 
+down_bem_genes_col <- select(bem_degs, c("genes", "logFC", "gene_name")) #downregulated genes
+# from the combined annotated downregulatd enrichment, select only treatment of interest
+down_bem_cluster<- down_merge_annot_ordered %>% # go terms and their cluster assignment
+  filter(treatment == "Bemcentinib")
+# split out the genes from each go term into individual rows in order to merge with logfc data
+down_bem_enrichment <- bem_BP_down %>%
+  mutate(geneID = strsplit(as.character(geneID), "/")) %>%
+  unnest(geneID)
+#merge logfc data (down_bem_genes_col) with the enrichment df
+down_bem_merged_data_genes <- down_bem_enrichment %>%
+  left_join(down_bem_genes_col, by = c("geneID" = "gene_name"))
+# now join with the annotated cluster data 
+down_bem_merged_data_cluster <- down_bem_merged_data_genes %>%
+  left_join(down_bem_cluster, by = c("ID" = "id"))
+# summarise the logfc for each of the specific immune terms 
+down_bem_average_fc <- down_bem_merged_data_cluster %>%
+  group_by(specific_immune_term) %>%
+  summarise(Bemcentinib = mean(logFC, na.rm = TRUE)) %>%
+  ungroup()
+
+
+#Tozorakimab
+#select only the genes/name and their logfc 
+down_toz_genes_col <- select(toz_degs, c("genes", "logFC", "gene_name")) #downregulated genes
+# from the combined annotated downregulated enrichment, select only treatment of interest
+down_toz_cluster<- down_merge_annot_ordered %>% # go terms and their cluster assignment
+  filter(treatment == "Tozorakimab")
+# split out the genes from each go term into individual rows in order to merge with logfc data
+down_toz_enrichment <- toz_BP_down %>%
+  mutate(geneID = strsplit(as.character(geneID), "/")) %>%
+  unnest(geneID)
+#merge logfc data (down_bem_genes_col) with the enrichment df
+down_toz_merged_data_genes <- down_toz_enrichment %>%
+  left_join(down_toz_genes_col, by = c("geneID" = "gene_name"))
+# now join with the annotated cluster data 
+down_toz_merged_data_cluster <- down_toz_merged_data_genes %>%
+  left_join(down_toz_cluster, by = c("ID" = "id"))
+# summarise the logfc for each of the specific immune terms 
+down_toz_average_fc <- down_toz_merged_data_cluster %>%
+  group_by(specific_immune_term) %>%
+  summarise(Tozorakimab = mean(logFC, na.rm = TRUE)) %>%
+  ungroup()
+
+
+
+#Zilucoplan
+down_zil_genes_col <- select(zil_degs, c("genes", "logFC", "gene_name")) #downregulated genes
+# from the combined annotated downregulated enrichment, select only treatment of interest
+down_zil_cluster<- down_merge_annot_ordered %>% # go terms and their cluster assignment
+  filter(treatment == "Zilucoplan")
+# split out the genes from each go term into individual rows in order to merge with logfc data
+down_zil_enrichment <- zil_BP_down %>%
+  mutate(geneID = strsplit(as.character(geneID), "/")) %>%
+  unnest(geneID)
+#merge logfc data (down_bem_genes_col) with the enrichment df
+down_zil_merged_data_genes <- down_zil_enrichment %>%
+  left_join(down_zil_genes_col, by = c("geneID" = "gene_name"))
+# now join with the annotated cluster data 
+down_zil_merged_data_cluster <- down_zil_merged_data_genes %>%
+  left_join(down_zil_cluster, by = c("ID" = "id"))
+# summarise the logfc for each of the specific immune terms 
+down_zil_average_fc <- down_zil_merged_data_cluster %>%
+  group_by(specific_immune_term) %>%
+  summarise(Zilucoplan = mean(logFC, na.rm = TRUE)) %>%
+  ungroup()
+
+
+# Replace missing avg_logFC values with 0 for each treatment df
+down_bem_average_fc <- down_bem_average_fc %>%
+  mutate(Bemcentinib = replace_na(Bemcentinib, 0))
+
+down_toz_average_fc <- down_toz_average_fc %>%
+  mutate(Tozorakimab = replace_na(Tozorakimab, 0))
+
+down_zil_average_fc <- down_zil_average_fc %>%
+  mutate(Zilucoplan = replace_na(Zilucoplan, 0))
+
+# Perform full join to combine all data
+down_combined_df <- down_bem_average_fc %>%
+  full_join(down_toz_average_fc, by = "specific_immune_term") %>%
+  full_join(down_zil_average_fc, by = "specific_immune_term") %>%
+  mutate(
+    Bemcentinib = replace_na(Bemcentinib, 0),
+    Tozorakimab = replace_na(Tozorakimab, 0),
+    Zilucoplan = replace_na(Zilucoplan, 0)
+  )%>% 
+  filter(specific_immune_term!="")
+
+# Create a matrix for the heatmap
+down_heatmap_matrix <- down_combined_df %>%
+  column_to_rownames("specific_immune_term") %>%  # Use terms as row names
+  as.matrix()  # Convert to matrix format
+
+```
+
+
+
+upregulated
+```{r}
+#Bemcentinib
+#select only the genes/name and their logfc 
+up_bem_genes_col <- select(bem_degs, c("genes", "logFC", "gene_name")) #upregulated genes
+# from the combined annotated upregulatd enrichment, select only treatment of interest
+up_bem_cluster<- up_merge_annot_ordered %>% # go terms and their cluster assignment
+  filter(treatment == "Bemcentinib")
+# split out the genes from each go term into individual rows in order to merge with logfc data
+up_bem_enrichment <- bem_BP_up %>%
+  mutate(geneID = strsplit(as.character(geneID), "/")) %>%
+  unnest(geneID)
+#merge logfc data (up_bem_genes_col) with the enrichment df
+up_bem_merged_data_genes <- up_bem_enrichment %>%
+  left_join(up_bem_genes_col, by = c("geneID" = "gene_name"))
+# now join with the annotated cluster data 
+up_bem_merged_data_cluster <- up_bem_merged_data_genes %>%
+  left_join(up_bem_cluster, by = c("ID" = "id"))
+# summarise the logfc for each of the specific immune terms 
+up_bem_average_fc <- up_bem_merged_data_cluster %>%
+  group_by(specific_immune_term) %>%
+  summarise(Bemcentinib = mean(logFC, na.rm = TRUE)) %>%
+  ungroup()
+
+
+
+
+#Tozorakimab
+#select only the genes/name and their logfc 
+down_toz_genes_col <- select(toz_degs, c("genes", "logFC", "gene_name")) #downregulated genes
+# from the combined annotated downregulatd enrichment, select only treatment of interest
+down_toz_cluster<- down_merge_annot_ordered %>% # go terms and their cluster assignment
+  filter(treatment == "Tozorakimab")
+# split out the genes from each go term into individual rows in order to merge with logfc data
+down_toz_enrichment <- toz_BP_down %>%
+  mutate(geneID = strsplit(as.character(geneID), "/")) %>%
+  unnest(geneID)
+#merge logfc data (down_toz_genes_col) with the enrichment df
+down_toz_merged_data_genes <- down_toz_enrichment %>%
+  left_join(down_toz_genes_col, by = c("geneID" = "gene_name"))
+# now join with the annotated cluster data 
+down_toz_merged_data_cluster <- down_toz_merged_data_genes %>%
+  left_join(down_toz_cluster, by = c("ID" = "id"))
+# summarise the logfc for each of the specific immune terms 
+down_toz_average_fc <- down_toz_merged_data_cluster %>%
+  group_by(specific_immune_term) %>%
+  summarise(Tozorakimab = mean(logFC, na.rm = TRUE)) %>%
+  ungroup()
+
+
+#Zilucoplan
+#select only the genes/name and their logfc 
+down_zil_genes_col <- select(zil_degs, c("genes", "logFC", "gene_name")) #downregulated genes
+# from the combined annotated downregulatd enrichment, select only treatment of interest
+down_zil_cluster<- down_merge_annot_ordered %>% # go terms and their cluster assignment
+  filter(treatment == "Zilucoplan")
+# split out the genes from each go term into individual rows in order to merge with logfc data
+down_zil_enrichment <- zil_BP_down %>%
+  mutate(geneID = strsplit(as.character(geneID), "/")) %>%
+  unnest(geneID)
+#merge logfc data (down_zil_genes_col) with the enrichment df
+down_zil_merged_data_genes <- down_zil_enrichment %>%
+  left_join(down_zil_genes_col, by = c("geneID" = "gene_name"))
+# now join with the annotated cluster data 
+down_zil_merged_data_cluster <- down_zil_merged_data_genes %>%
+  left_join(down_zil_cluster, by = c("ID" = "id"))
+# summarise the logfc for each of the specific immune terms 
+down_zil_average_fc <- down_zil_merged_data_cluster %>%
+  group_by(specific_immune_term) %>%
+  summarise(Zilucoplan = mean(logFC, na.rm = TRUE)) %>%
+  ungroup()
+
+
+# Replace missing avg_logFC values with 0
+up_bem_average_fc <- up_bem_average_fc %>%
+  mutate(Bemcentinib = replace_na(Bemcentinib, 0))
+
+up_toz_average_fc <- up_toz_average_fc %>%
+  mutate(Tozorakimab = replace_na(Tozorakimab, 0))
+
+up_zil_average_fc <- up_zil_average_fc %>%
+  mutate(Zilucoplan = replace_na(Zilucoplan, 0))
+
+# Perform full join to combine all data
+up_combined_df <- up_bem_average_fc %>%
+  full_join(up_toz_average_fc, by = "specific_immune_term") %>%
+  full_join(up_zil_average_fc, by = "specific_immune_term") %>%
+  mutate(
+    Bemcentinib = replace_na(Bemcentinib, 0),
+    Tozorakimab = replace_na(Tozorakimab, 0),
+    Zilucoplan = replace_na(Zilucoplan, 0)
+  )%>% 
+  filter(specific_immune_term!="")
+
+# Create a matrix for the heatmap
+up_heatmap_matrix <- up_combined_df %>%
+  column_to_rownames("specific_immune_term") %>%  # Use terms as row names
+  as.matrix()  # Convert to matrix format
+
+```
+
+Combined up and down for plotting
+
+```{r}
+# combine up and down for plotting
+# Clean up column names by removing "up_" and "down_" prefixes ----- if present
+colnames(up_combined_df) <- gsub("^up_", "", colnames(up_combined_df))
+colnames(down_combined_df) <- gsub("^down_", "", colnames(down_combined_df))
+
+#  Combine the data using 'specific_immune_term'
+final_combined_df <- full_join(up_combined_df, down_combined_df, by = "specific_immune_term")
+
+# Replace 0s with NA so we can combine based on actual values
+final_combined_df[final_combined_df == 0] <- NA
+
+# Combine up and down values into a single column for each treatment,
+# using pmax to keep the non-NA values (and allow both negative and positive values)
+final_combined_df <- final_combined_df %>%
+  mutate(
+    Bemcentinib = pmax(Bemcentinib.x, Bemcentinib.y, na.rm = TRUE),
+    Tozorakimab = pmax(Tozorakimab.x, Tozorakimab.y, na.rm = TRUE),
+    Zilucoplan = pmax(Zilucoplan.x, Zilucoplan.y, na.rm = TRUE)
+  ) %>%
+  select(specific_immune_term, Bemcentinib, Tozorakimab, Zilucoplan)  # Keep only the combined treatment columns
+# Replace any remaining NA values with 0 
+final_combined_df[is.na(final_combined_df)] <- 0
+# Set 'specific_immune_term' as row names and convert to matrix for the heatmap
+final_combined_matrix <- final_combined_df %>%
+  column_to_rownames("specific_immune_term") %>%
+  as.matrix()
+```
+
+Heatmap aesthetics
+```{r}
+# Combine down_categories and up_categories parent_term mapping
+parent_term_mapping <- rbind(
+  down_annot[, c("specific_immune_term", "parent_term")],
+  up_annot[, c("specific_immune_term", "parent_term")]
+)
+# Keep only unique rows
+parent_term_mapping <- unique(parent_term_mapping)%>%
+  filter(specific_immune_term != "")
+
+# set annotations
+annotation_row = data.frame(
+  Immune_category = parent_term_mapping$parent_term, 
+  row.names = parent_term_mapping$specific_immune_term)
+#set colours
+ann_colours<-list("Immune_category" =c(
+  "Immune cell activation" = "#D32F2F",            # Red
+  "Immune response regulation" = "#66cc66",       # Green
+  "Inflammatory mediator signalling" = "#2196F3"  # Blue
+))
+# row annotations
+row_annotation <- rowAnnotation(
+  Immune_category = annotation_row$Immune_category,
+  col = list(Immune_category = ann_colours$Immune_category),
+ # annotation_name = "Immune Category",  # Set the custom title
+   show_annotation_name = FALSE,  # Show the annotation title
+ annotation_legend_param = list(
+   title = "Immune Category"))
+
+#REORDER COLUIMNS
+# order based on the mean of each treatment column across all rows
+ordered_columns <- final_combined_df %>%
+  select(Bemcentinib, Tozorakimab, Zilucoplan) %>%
+  summarise(across(everything(), mean, na.rm = TRUE)) %>%
+  gather(key = "Treatment", value = "Mean") %>%
+  arrange(Mean) %>%
+  pull(Treatment)
+# Reorder the matrix columns based on the sorted treatment names
+final_combined_matrix <- final_combined_matrix[, ordered_columns]
+# Ensure row annotation order matches matrix rows
+annotation_row <- annotation_row[rownames(final_combined_matrix), , drop = FALSE]
+#plotting aesthetics
+col = circlize::colorRamp2(c(-1, 0, 1), hcl_palette ="RdBu", reverse = TRUE)
+```
+Finally plot the heatmap
+```{r fig.height=10, fig.width=7}
+# Plot the heatmap with the columns ordered as desired
+set.seed(1234)
+heatmap<-ComplexHeatmap::pheatmap(
+  final_combined_matrix,
+  col = col,
+  cluster_rows = TRUE,  # Hierarchical clustering for rows
+  cluster_cols = FALSE,  # Do not cluster columns, as they are now ordered
+  main = "Immune response pathways",
+  border = TRUE,
+  border_color = "darkgrey",
+  cellheight = 15,
+  cellwidth = 15,
+  fontsize = 14,
+  heatmap_legend_param = list(
+    legend_direction = "horizontal", 
+    legend_width = unit(5, "cm"),
+    title= "logFC"), 
+  angle_col = "45",
+  #column_names_rot = 45, column_names_side = "top",
+  #annotation_row = annotation_row,
+  annotation_colors = ann_colours, 
+ # annotation_legend_side = 'right',
+ # left_annotation = NULL,  # No annotations on the left
+  right_annotation = row_annotation) # Move row annotation to the right)
+
+draw(heatmap, heatmap_legend_side = "bottom")
+
+```
+# 5.  Enriched process overlap between treatments - upsetplot
+Visualise the overlap of enriched terms from the up/down enrichment results for each treatment arm (saved in enrichment_analysis_plotting_data.Rdata)
+
+```{r}
+
+# Extract the Description columns for both "up" and "down" data as these will be used to compare across treatment arms
+bem_desc_down <- bem_BP_down$Description
+bem_desc_up <- bem_BP_up$Description
+toz_desc_down <- toz_BP_down$Description
+toz_desc_up <- toz_BP_up$Description
+zil_desc_down <- zil_BP_down$Description
+zil_desc_up <- zil_BP_up$Description
+# Create a list of sets of these desc
+sets <- list(
+  Bem_BP_down = bem_desc_down,
+  Bem_BP_up = bem_desc_up,
+  Toz_BP_down = toz_desc_down,
+  Toz_BP_up = toz_desc_up,
+  Zil_BP_down = zil_desc_down,
+  Zil_BP_up = zil_desc_up
+)
+
+# Create a binary matrix indicating presence/absence of each description in each set
+all_descriptions <- unique(c(bem_desc_down, bem_desc_up, toz_desc_down, toz_desc_up, zil_desc_down, zil_desc_up))
+binary_matrix <- data.frame(Description = all_descriptions)
+
+for (set_name in names(sets)) {
+  binary_matrix[[set_name]] <- as.logical(all_descriptions %in% sets[[set_name]])
+}
+
+#change column names
+current_colnames <- colnames(binary_matrix)
+# Replace "BP" with an empty string in each column name
+new_colnames <- gsub("_BP", "", current_colnames)
+# Add additional descriptions
+new_colnames[new_colnames == "Bem_down"] <- "Bemcentinib downregulated"
+new_colnames[new_colnames == "Bem_up"] <- "Bemcentinib upregulated"
+new_colnames[new_colnames == "Toz_down"] <- "Tozorakimab downregulated"
+new_colnames[new_colnames == "Toz_up"] <- "Tozorakimab upregulated"
+new_colnames[new_colnames == "Zil_down"] <- "Zilucoplan downregulated"
+new_colnames[new_colnames == "Zil_up"] <- "Zilucoplan upregulated"
+
+# Assign modified column names to the binary matrix
+colnames(binary_matrix) <- new_colnames
+#also for vector
+names <- c("Bem_BP_down", "Bem_BP_up", "Toz_BP_down", "Toz_BP_up", "Zil_BP_down", "Zil_BP_up")
+# Define categories as the column names of binary_matrix excluding "Description"
+categories <- colnames(binary_matrix)[-1]
+
+# plot the upset plot
+upset(
+  binary_matrix,
+  categories,
+  name = 'Treatment Arm',
+  queries=list(
+    upset_query(set='Bemcentinib downregulated', fill='forestgreen',color="black"),
+    upset_query(set='Bemcentinib upregulated', fill=alpha('forestgreen', 0.5),color="black"),
+    upset_query(set='Tozorakimab downregulated', fill=alpha('yellow', 0.75),color="black"),
+    upset_query(set='Tozorakimab upregulated', fill='yellow',color="black"),
+    upset_query(set='Zilucoplan downregulated', fill='red',color="black"),
+    upset_query(set='Zilucoplan upregulated', fill=alpha('red', 0.5),color="black")), 
+  
+  matrix=(
+    intersection_matrix(
+      geom=geom_point(
+        shape=21,
+        size=3.5),
+      #turn off borders(will get double border otherwise)
+      outline_color=list(
+        active=NA,
+        inactive=NA))),
+  
+  base_annotations = list(
+    'Intersection size' = intersection_size(bar_number_threshold=1,  # show all numbers on top of bars
+                                            mapping = aes(fill = 'bars_color', color='bars_color'),
+                                            text = list(color = "black")) +
+      
+      ggtitle("Intersection sizes: Biological Processes")+
+      scale_fill_manual(values = alpha("grey", 0.5), guide = "none") + # Set alpha for fill color
+      scale_color_manual(values = "black", guide = "none") + # Set border color to black
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+            axis.line = element_line(color = "black"), axis.title.y = element_blank()) +
+      scale_y_continuous(expand = expansion(mult = c(0, .1)))),
+  
+  set_sizes=(
+    upset_set_size(geom=geom_bar(width=0.8), mapping = aes(fill = 'bars_color', color='bars_color'))
+    + theme(
+      axis.line.x=element_line(colour='black'),
+      axis.ticks.x=element_line()+ 
+        scale_y_continuous(expand = expansion(mult = c(0, .1)))
+    )))
+
+
+
+```
+
+
+
+# 6.  Unique and shared DEGs - venn and bubbleplot
+
+Now looking at the overlap of DEGs between the treatment arms. 
+Here we isolate the shared and unique genes for each intersection, perform enrichment analysis 
+
+First plot venn diagram
+
+```{r}
+
+# Bemcentinib
+up_bem_genes_ids <- as.character(bem_degs$ensembl_gene_id[bem_degs$logFC > 0])
+down_bem_genes_ids <- as.character(bem_degs$ensembl_gene_id[bem_degs$logFC < 0])
+
+# Tozorakimab
+up_toz_genes_ids <- as.character(toz_degs$ensembl_gene_id[toz_degs$logFC > 0])
+down_toz_genes_ids <- as.character(toz_degs$ensembl_gene_id[toz_degs$logFC < 0])
+# Zilucoplan
+up_Zil_genes_ids <- as.character(zil_degs$ensembl_gene_id[zil_degs$logFC > 0])
+down_Zil_genes_ids <- as.character(zil_degs$ensembl_gene_id[zil_degs$logFC < 0])
+
+
+# Create a list of up-regulated genes for each drug
+up_genes_list <- list(
+  Bemcentinib = up_bem_genes_ids,
+  Tozorakimab = up_toz_genes_ids,
+  Zilucoplan = up_Zil_genes_ids
+)
+
+# Create a list of down-regulated genes for each drug
+down_genes_list <- list(
+  Bemcentinib = down_bem_genes_ids,
+  Tozorakimab = down_toz_genes_ids,
+  Zilucoplan = down_Zil_genes_ids
+)
+
+ggvenn(
+  down_genes_list, 
+  fill_color = c("forestgreen", "#EFC000FF", "#CD534CFF"),
+  stroke_size = 0.5, set_name_size = 3, text_size =2)+
+  ggtitle("Downregulated DEGs")+
+  theme(plot.title = element_text(size = 10, face = "bold"))
+
+ggvenn(
+  up_genes_list, 
+  fill_color = c("forestgreen", "#EFC000FF", "#CD534CFF"),
+  stroke_size = 0.5, set_name_size = 3, text_size =2)+
+  ggtitle("Upregulated DEGs")+
+  theme(plot.title = element_text(size = 10, face = "bold"))
+```
+
+```{r}
+# Bemcentinib
+up_bem_genes_ids <- as.character(bem_degs$ensembl_gene_id[bem_degs$logFC > 0])
+down_bem_genes_ids <- as.character(bem_degs$ensembl_gene_id[bem_degs$logFC < 0])
+
+# Tozorakimab
+up_toz_genes_ids <- as.character(toz_degs$ensembl_gene_id[toz_degs$logFC > 0])
+down_toz_genes_ids <- as.character(toz_degs$ensembl_gene_id[toz_degs$logFC < 0])
+# Zilucoplan
+up_Zil_genes_ids <- as.character(zil_degs$ensembl_gene_id[zil_degs$logFC > 0])
+down_Zil_genes_ids <- as.character(zil_degs$ensembl_gene_id[zil_degs$logFC < 0])
+
+
+# Create a list of up-regulated genes for each drug
+up_genes_list <- list(
+  Bemcentinib = up_bem_genes_ids,
+  Tozorakimab = up_toz_genes_ids,
+  Zilucoplan = up_Zil_genes_ids
+)
+
+# Create a list of down-regulated genes for each drug
+down_genes_list <- list(
+  Bemcentinib = down_bem_genes_ids,
+  Tozorakimab = down_toz_genes_ids,
+  Zilucoplan = down_Zil_genes_ids
+)
+
+
+
+ggvenn(
+  down_genes_list, 
+  fill_color = c("forestgreen", "#EFC000FF", "#CD534CFF"),
+  stroke_size = 0.5, set_name_size = 3, text_size =2)+
+  ggtitle("Downregulated DEGs")+
+  theme(plot.title = element_text(size = 10, face = "bold"))
+
+ggvenn(
+  up_genes_list, 
+  fill_color = c("forestgreen", "#EFC000FF", "#CD534CFF"),
+  stroke_size = 0.5, set_name_size = 3, text_size =2)+
+  ggtitle("Upregulated DEGs")+
+  theme(plot.title = element_text(size = 10, face = "bold"))
+
+
+
+## enrichment
+# need to extract the genes from the intersection
+#down
+names(down_genes_list) <- c("Bemcentinib","Tozorakimab","Zilucoplan") 
+data_down <- get.venn.partitions(down_genes_list, force.unique = TRUE, keep.elements = TRUE, hierarchical = FALSE)
+# Extract relevant columns
+# Convert the "..values.." column to a character vector
+data_down$..values.. <- sapply(data_down$..values.., function(x) paste(x, collapse = ","))
+# Convert the list to a data frame
+down_partition_df <- as.data.frame(data_down)
+# Extract relevant values for Zilucoplan, Bemcentinib, Tozorakimab for the intersections
+down_zil_values <- data_down$`..values..`[data_down$Zilucoplan & !data_down$Bemcentinib & !data_down$Tozorakimab][[1]] #zil only
+down_bem_values <- data_down$`..values..`[!data_down$Zilucoplan &  data_down$Bemcentinib & !data_down$Tozorakimab][[1]] #Bemcentinib only
+down_toz_values <- data_down$`..values..`[!data_down$Zilucoplan &  !data_down$Bemcentinib & data_down$Tozorakimab][[1]] #toz only
+down_shared_values <- data_down$`..values..`[data_down$Zilucoplan &  data_down$Bemcentinib & data_down$Tozorakimab][[1]] # shared between all 3
+down_shared_bem_toz <- data_down$`..values..`[!data_down$Zilucoplan & data_down$Bemcentinib & data_down$Tozorakimab][[1]] #shared between Bemcentinib and toz
+down_shared_zil_toz <- data_down$`..values..`[data_down$Zilucoplan & !data_down$Bemcentinib & data_down$Tozorakimab][[1]] #shared between toz and zil
+
+# Zilucoplan
+# Create dataframes for each condition with the condition name as the column name
+down_zil_df <- data.frame(Zilucoplan = down_zil_values)
+row.names(down_zil_df) <- down_zil_df$Zilucoplan
+# Split the string into individual genes
+down_zil_values_split <- strsplit(down_zil_values, ",")[[1]]
+# Create a data frame with genes as individual columns
+down_zil_df <- data.frame((down_zil_values_split))  # Transpose to make genes columns
+# Assign proper column names
+colnames(down_zil_df) <- "Zilucoplan"
+row.names(down_zil_df) <- down_zil_df$Zilucoplan
+# Display the resulting data frame
+down_zil_df
+
+# Bemcentinib Data
+down_bem_values_split <- strsplit(down_bem_values, ",")[[1]]
+down_bem_df <- data.frame(down_bem_values_split)  # Create a data frame
+colnames(down_bem_df) <- "Bemcentinib"  # Assign column name
+row.names(down_bem_df) <- down_bem_df$Bemcentinib  # Set row names
+
+# Tozorakimab Data
+down_toz_values_split <- strsplit(down_toz_values, ",")[[1]]
+down_toz_df <- data.frame(down_toz_values_split)  # Create a data frame
+colnames(down_toz_df) <- "Tozorakimab"  # Assign column name
+row.names(down_toz_df) <- down_toz_df$Tozorakimab  # Set row names
+
+# Shared Data
+down_shared_values_split <- strsplit(down_shared_values, ",")[[1]]
+down_shared_df <- data.frame(down_shared_values_split)  # Create a data frame
+colnames(down_shared_df) <- "Shared"  # Assign column name
+row.names(down_shared_df) <- down_shared_df$Shared  # Set row names
+
+# Shared Bemcentinib and Tozorakimab Data
+down_shared_bem_toz_split <- strsplit(down_shared_bem_toz, ",")[[1]]
+down_shared_bem_toz_df <- data.frame(down_shared_bem_toz_split)  # Create a data frame
+colnames(down_shared_bem_toz_df) <- "Shared"  # Assign column name
+row.names(down_shared_bem_toz_df) <- down_shared_bem_toz_df$Shared  # Set row names
+
+# Shared Zilucoplan and Tozorakimab Data
+down_shared_zil_toz_split <- strsplit(down_shared_zil_toz, ",")[[1]]
+down_shared_zil_toz_df <- data.frame(down_shared_zil_toz_split)  # Create a data frame
+colnames(down_shared_zil_toz_df) <- "Shared"  # Assign column name
+row.names(down_shared_zil_toz_df) <- down_shared_zil_toz_df$Shared  # Set row names
+
+
+# Define the set of  genes
+down_Zil_set <- down_zil_df$Zilucoplan
+down_toz_set<-down_toz_df$Tozorakimab
+down_Bem_set<-down_bem_df$Bemcentinib
+down_Shared_set<-down_shared_results$Shared
+down_shared_bem_toz<-down_shared_bem_toz_df$Shared
+down_shared_toz_zil<-down_shared_zil_toz_df$Shared
+
+# now for up
+## enrichment
+# need to extract the genes from the intersection
+#up
+names(up_genes_list) <- c("Bemcentinib","Tozorakimab","Zilucoplan") 
+data_up<- get.venn.partitions(up_genes_list, force.unique = TRUE, keep.elements = TRUE, hierarchical = FALSE)
+# Extract relevant columns
+# Convert the "..values.." column to a character vector
+data_up$..values.. <- sapply(data_up$..values.., function(x) paste(x, collapse = ","))
+# Convert the list to a data frame
+up_partition_df <- as.data.frame(data_up)
+# Extract relevant values for Zilucoplan, Bemcentinib, Tozorakimab for the intersections
+up_zil_values <- data_up$`..values..`[data_up$Zilucoplan & !data_up$Bemcentinib & !data_up$Tozorakimab][[1]] #zil only
+up_bem_values <- data_up$`..values..`[!data_up$Zilucoplan &  data_up$Bemcentinib & !data_up$Tozorakimab][[1]] #Bemcentinib only
+up_toz_values <- data_up$`..values..`[!data_up$Zilucoplan &  !data_up$Bemcentinib & data_up$Tozorakimab][[1]] #toz only
+up_shared_values <- data_up$`..values..`[data_up$Zilucoplan &  data_up$Bemcentinib & data_up$Tozorakimab][[1]] # shared between all 3
+up_shared_bem_toz <- data_up$`..values..`[!data_up$Zilucoplan & data_up$Bemcentinib & data_up$Tozorakimab][[1]] #shared between Bemcentinib and toz
+up_shared_zil_toz <- data_up$`..values..`[data_up$Zilucoplan & !data_up$Bemcentinib & data_up$Tozorakimab][[1]] #shared between toz and zil
+
+
+# Zilucoplan
+# Create dataframes for each condition with the condition name as the column name
+up_zil_df <- data.frame(Zilucoplan = up_zil_values)
+row.names(up_zil_df) <- up_zil_df$Zilucoplan
+# Split the string into individual genes
+up_zil_values_split <- strsplit(up_zil_values, ",")[[1]]
+# Create a data frame with genes as individual columns
+up_zil_df <- data.frame((up_zil_values_split))  # Transpose to make genes columns
+# Assign proper column names
+colnames(up_zil_df) <- "Zilucoplan"
+row.names(up_zil_df) <- up_zil_df$Zilucoplan
+# Display the resulting data frame
+up_zil_df
+
+# Bemcentinib Data
+up_bem_values_split <- strsplit(up_bem_values, ",")[[1]]
+up_bem_df <- data.frame(up_bem_values_split)  # Create a data frame
+colnames(up_bem_df) <- "Bemcentinib"  # Assign column name
+row.names(up_bem_df) <- up_bem_df$Bemcentinib  # Set row names
+
+# Tozorakimab Data
+up_toz_values_split <- strsplit(up_toz_values, ",")[[1]]
+up_toz_df <- data.frame(up_toz_values_split)  # Create a data frame
+colnames(up_toz_df) <- "Tozorakimab"  # Assign column name
+row.names(up_toz_df) <- up_toz_df$Tozorakimab  # Set row names
+
+# Shared Data
+up_shared_values_split <- strsplit(up_shared_values, ",")[[1]]
+up_shared_df <- data.frame(up_shared_values_split)  # Create a data frame
+colnames(up_shared_df) <- "Shared"  # Assign column name
+row.names(up_shared_df) <- up_shared_df$Shared  # Set row names
+
+# Shared Bemcentinib and Tozorakimab Data
+up_shared_bem_toz_split <- strsplit(up_shared_bem_toz, ",")[[1]]
+up_shared_bem_toz_df <- data.frame(up_shared_bem_toz_split)  # Create a data frame
+colnames(up_shared_bem_toz_df) <- "Shared"  # Assign column name
+row.names(up_shared_bem_toz_df) <- up_shared_bem_toz_df$Shared  # Set row names
+
+# Shared Zilucoplan and Tozorakimab Data
+up_shared_zil_toz_split <- strsplit(up_shared_zil_toz, ",")[[1]]
+up_shared_zil_toz_df <- data.frame(up_shared_zil_toz_split)  # Create a data frame
+colnames(up_shared_zil_toz_df) <- "Shared"  # Assign column name
+row.names(up_shared_zil_toz_df) <- up_shared_zil_toz_df$Shared  # Set row names
+
+
+# Define the set of  genes
+up_Zil_set <- up_zil_df$Zilucoplan
+up_toz_set<-up_toz_df$Tozorakimab
+up_Bem_set<-up_bem_df$Bemcentinib
+up_shared_set<-up_shared_df$Shared
+up_shared_bem_toz<-up_shared_bem_toz_df$Shared
+up_shared_toz_zil<-up_shared_zil_toz_df$Shared
+
+
+
+
+# Define the background gene set
+#here using soc
+load("soc_data.Rdata")
+background_genes <- row.names(soc_counts)
+#down
+gene_sets <- list(
+  down_zil_set=down_zil_df$Zilucoplan,
+  down_toz_set=down_toz_df$Tozorakimab,
+  down_bem_set=down_bem_df$Bemcentinib,
+  down_shared_set=down_shared_df$Shared,
+  down_shared_bem_toz=down_shared_bem_toz_df$Shared,
+  down_shared_toz_zil=down_shared_zil_toz_df$Shared,
+  up_zil_set=up_zil_df$Zilucoplan,
+  up_toz_set=up_toz_df$Tozorakimab,
+  up_bem_set=up_bem_df$Bemcentinib,
+  up_shared_set=up_shared_df$Shared,
+  up_shared_bem_toz=up_shared_bem_toz_df$Shared,
+  up_shared_toz_zil=up_shared_zil_toz_df$Shared)
+
+# Set up plot parameters
+plot_width <- 8
+plot_height <- 10
+#define root.name
+root.name <- "v2_Drug_DEG_overlap"
+# List of GO categories
+go_categories <- c("MF", "BP", "CC")
+
+# Loop through each gene set
+for (gene_set_name in names(gene_sets)) {
+  gene_set <- gene_sets[[gene_set_name]]
+  
+  for (go in go_categories) {
+    # Perform GO enrichment analysis for the current gene set
+    ego <- tryCatch({
+      enrichGO(gene = gene_set,
+               universe = background_genes,
+               OrgDb = "org.Hs.eg.db",
+               keyType = "ENSEMBL",
+               ont = go,
+               pAdjustMethod = "BH",
+               qvalueCutoff = 0.05,
+               readable = TRUE)
+    }, error = function(e) NULL)
+    
+    if (!is.null(ego$geneID) && nrow(ego) > 0) {
+      # Barplot for top 20 enriched pathways for the current gene set
+      bar_plot <- barplot(ego, showCategory = 20) +
+        ggtitle(paste("Top 20 enriched", go, "pathways for", gene_set_name)) +
+        theme_minimal()
+      
+      # Save plot as PDF
+      ggsave(filename = paste(root.name, gene_set_name, go, "_barplot.pdf", sep = ""), plot = bar_plot, width = plot_width, height = plot_height)
+    } else {
+      cat(paste("No enriched terms found for", go, "in the", gene_set_name, ". Skipping..."))
+    }
+    
+    # Save enrichment results as CSV
+    if (!is.null(ego$geneID) && nrow(ego) > 0) {
+      write.csv(ego, file = paste(root.name, gene_set_name, go, "_enrichment_results.csv", sep = ""), row.names = FALSE)
+    } else {
+      cat(paste("No enriched terms found for", go, "in the", gene_set_name, ". Skipping..."))
+    }
+  }
+}
+
+```
+
+Now use these enrichment results to see if similar or unique processes are enriched by unique and shared degs across treatments
+
+```{r}
+
+## there are a significant number of shared terms between toz and bem 
+# expected due to the number of shared degs
+# to be able to plot, keep only the bem/toz shared degs which also appear in the bem_unique section
+#these files will be output from the above enrichment analysis as csv, will need to read back in
+bem_unique <- read.csv("Drug_DEG_overlapdown_Bem_setBP_enrichment_results.csv") %>%
+  mutate(overlap = "bem_unique", regulation = "downregulated")
+bem_toz_shared <- read.csv("Drug_DEG_overlapdown_shared_bem_tozBP_enrichment_results.csv") %>%
+  mutate(overlap = "bem_toz_shared", regulation = "downregulated")
+shared_terms <- intersect(bem_unique$ID, bem_toz_shared$ID)
+filtered_bem_data <- bem_unique %>%
+  filter(ID %in% shared_terms) %>%
+  bind_rows(bem_toz_shared %>% filter(ID %in% shared_terms))
+
+#  read in remaining data and process
+other_files <- list(
+  bem_toz_zil_shared_down = list(file = "Drug_DEG_overlapdown_Shared_setBP_enrichment_results.csv", overlap = "bem_toz_zil_shared", regulation = "downregulated"),
+  toz_zil_shared_down = list(file = "Drug_DEG_overlapdown_shared_toz_zilBP_enrichment_results.csv", overlap = "toz_zil_shared", regulation = "downregulated"),
+  toz_zil_shared_up = list(file = "Drug_DEG_overlapup_shared_toz_zilBP_enrichment_results.csv", overlap = "toz_zil_shared", regulation = "upregulated"),
+  bem_toz_shared_up = list(file = "Drug_DEG_overlapup_shared_bem_tozBP_enrichment_results.csv", overlap = "bem_toz_shared", regulation = "upregulated"),
+  toz_unique = list(file = "Drug_DEG_overlapup_toz_setBP_enrichment_results.csv", overlap = "toz_unique", regulation = "upregulated"),
+  zil_unique = list(file = "Drug_DEG_overlapup_Zil_setBP_enrichment_results.csv", overlap = "zil_unique", regulation = "upregulated")
+)
+
+other_data <- bind_rows(lapply(other_files, function(info) {
+  read.csv(info$file) %>%
+    mutate(overlap = info$overlap, regulation = info$regulation)
+}))
+
+#combine Filtered and Other Data
+final_data <- bind_rows(filtered_bem_data, other_data)
+
+# now add new columns for each treatment indicating whether it is associated with a specific term
+final_data_with_treatments <- final_data %>%
+  mutate(
+    # Add columns for each treatment and assign "yes" or "no"
+    bemcentinib = case_when(
+      str_detect(overlap, "bem") ~ "yes", 
+      TRUE ~ "no"
+    ),
+    tozorakimab = case_when(
+      str_detect(overlap, "toz") ~ "yes", 
+      TRUE ~ "no"
+    ),
+    zilucoplan = case_when(
+      str_detect(overlap, "zil") ~ "yes", 
+      TRUE ~ "no"
+    )
+  )
+
+# Now add 
+#  Reshape the data to have a "treatment" column
+final_data_treatment <- final_data_with_treatments %>%
+  # Step 2: Pivot the data longer to create a single 'treatment' column
+  pivot_longer(cols = c(bemcentinib, tozorakimab, zilucoplan), 
+               names_to = "treatment_type", 
+               values_to = "has_treatment") %>%
+  # Step 3: Filter rows where "has_treatment" is "yes"
+  filter(has_treatment == "yes") %>%
+  # Step 4: Create the new 'treatment' column based on the treatment type
+  mutate(treatment = case_when(
+    treatment_type == "bemcentinib" ~ "Bemcentinib",
+    treatment_type == "tozorakimab" ~ "Tozorakimab",
+    treatment_type == "zilucoplan" ~ "Zilucoplan",
+    TRUE ~ NA_character_
+  )) %>%
+  # Step 5: Drop the treatment_type and has_treatment columns
+  select(-treatment_type, -has_treatment)
+
+
+# Assuming final_data_treatment is your dataframe
+final_data_with_overlap_type <- final_data_treatment %>%
+  mutate(
+    # Create a new column 'overlap_type' based on whether 'shared' or 'unique' is in the overlap column
+    overlap_type = case_when(
+      str_detect(overlap, "shared") ~ "shared",
+      str_detect(overlap, "unique") ~ "unique",
+      TRUE ~ NA_character_  # If neither, assign NA or handle as you wish
+    )
+  )
+
+#terms may be shared between two or three sections - only want to keep one instance of this in the plot
+# Ensure that each combination of treatment and Description is unique
+final_data_unique <- final_data_with_overlap_type %>%
+  distinct(Description, treatment, overlap_type, .keep_all = TRUE)
+
+
+final_data_with_overlap_type_up <- final_data_unique %>%
+  filter(regulation == "upregulated")
+```
+
+Plot bubble plot for up and down, combine, extract shared legend
+```{r fig.width=16, fig.height=18}
+# Plot Bubble Plot
+up<-ggplot(final_data_with_overlap_type_up, aes(
+  x = treatment, 
+  y = factor(Description, levels = rev(sort(unique(Description)))),  # Reverse the order of ids
+  size = Count, 
+  color = regulation
+)) +
+  geom_point(alpha = 0.5) +
+  scale_size(range = c(1, 5), limits = c(0,100)) + # Adjust bubble size
+  scale_color_manual(values = c("downregulated" = "navy", "upregulated" = "darkred")) +
+  theme_bw() +
+  facet_grid(~ overlap_type, scales = "free_y") + # Facet by overlap
+  labs(
+    title = "Upregulated",
+    x = "Overlap Category",
+    y = "GO Term",
+    size = "Gene Count",
+    color = "Regulation"
+  ) +
+  theme(
+    axis.title =element_blank(),
+    legend.position = "right",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5)) 
+
+up_legend<-up +guides(color="none")
+
+final_data_with_overlap_type_down <- final_data_unique %>%
+  filter(regulation == "downregulated")
+
+
+# Plot Bubble Plot
+down<-ggplot(final_data_with_overlap_type_down, aes(
+  x = treatment, 
+  y = factor(Description, levels = rev(sort(unique(Description)))),  # Reverse the order of ids
+  size = Count, 
+  color = regulation
+)) +
+  geom_point(alpha = 0.5) +
+  scale_size(range = c(1, 5), limits = c(0,100)) + # Adjust bubble size
+  scale_color_manual(values = c("downregulated" = "navy", "upregulated" = "darkred")) +
+  theme_bw() +
+  facet_grid(~ overlap_type, scales = "free_y") + # Facet by overlap
+  labs(
+    title = "Downregulated",
+    x = "Overlap Category",
+    y = "GO Term",
+    size = "Gene Count",
+    color = "Regulation"
+  ) +
+  theme(
+    axis.title =element_blank(),
+    legend.position = "right",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5)
+    
+  )
+down_legend<-down+guides(color="none")
+
+#shared legend
+
+final_plot <- plot_grid(
+  up_legend + theme(legend.position = "none"),  # Remove legend from the first plot
+  down_legend + theme(legend.position = "none"),  # Remove legend from the second plot
+  ncol = 2, align = "v", rel_heights = c(1, 1)
+)
+
+# Extract the legend from one of the plots
+combined_legend <- get_legend(up_legend)
+# Combine the plots and legend with controlled spacing
+final_plot_with_legend <- plot_grid(
+  final_plot, combined_legend, 
+  ncol = 2,  # Place the legend next to the plots
+  rel_widths = c(0.85, 0.05)  # Adjust relative widths
+)
+# Display the final plot
+final_plot_with_legend
+
+
+```

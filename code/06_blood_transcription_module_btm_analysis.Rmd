@@ -1,0 +1,771 @@
+---
+title: "06_Blood_Transcription_Module_Analysis"
+#output: html_notebook
+---
+# Load libraries
+
+```{r message=FALSE}
+# Packages to load
+packages <- c(
+  "clusterProfiler", "ComplexHeatmap", "fgsea", "gpplot2", "pheatmap",
+  "rstatix", "tidyverse", "VennDiagram")
+
+########################################################################################################
+load_libraries <- function(packages) {
+  for (package in packages) {
+    if (!require(package, character.only = TRUE)) {
+      install.packages(package)
+      library(package, character.only = TRUE)
+    }
+  }
+}
+
+# Load all packages
+load_libraries(packages)
+
+```
+
+
+
+# Blood Transcription Module (BTM) Analysis
+
+## Generate Activity Scores
+
+using the btm_tool programme downloaded from the supplementary information of the
+following manuscript: - Li, S., Rouphael, N., Duraisingham, S., Romero-Steiner, S.,
+Presnell, S., Davis, C., ..., Pulendran, B. (2014). Molecular signatures of antibody
+responses derived from a systems biological study of 5 human vaccines. Nature immunology,
+15(2), 195. <https://www.nature.com/articles/ni.2789>
+
+Activity scores were created for each arm of the trial using normalised gene expression
+matrix of each arm for Day 1 and Day 5, which can be extracted from the corresponding 03_differential_expression notebook:
+
+```{python}
+# Need to evoke Python in the same directory where the downloaded files from Li et al (2014) were unpacked, which should include btm_tool.py and others.
+
+from btm_tool import * #This makes BTM data and a few functions available for use
+genetable_to_activityscores('soc_D1D5_CPM.txt','soc_BTM_activity.txt')
+genetable_to_activityscores('bem_D1D5_CPM.txt','bem_BTM_activity.txt')
+genetable_to_activityscores('toz_D1D5_CPM.txt','toz_BTM_activity.txt')
+genetable_to_activityscores('zil_D1D5_CPM.txt','zil_BTM_activity.txt')
+```
+
+activity score (txt) outputs were then saved as a Rdata object for subsequent analysis (btm_activity_scores.Rdata)
+
+## Compare activity scores between Day 1 and Day 5
+
+Differentially expressed BTM 
+
+These generated BTM activity scores were then subsequently used to compare differences in module activity scores between Day 1 and Day 5 for each treatment group individually using a paired Wilcoxon test.
+
+
+```{r}
+#load your saved btm activity scores
+load("btm_activity_scores.Rdata")
+#read in metadata
+metadata<-read.csv("accord_metadata.csv")
+# List of treatment arms and corresponding BTM activity objects
+treatment_arms <- c("Tozorakimab", "Bemcentinib", "Zilucoplan", "Standard of Care")
+
+btm_activity_objects <- list(
+  "Tozorakimab" = toz_BTM_activity,
+  "Bemcentinib" = bem_BTM_activity,
+  "Zilucoplan" = zil_BTM_activity,
+  "Standard of Care" = soc_BTM_activity
+)
+
+# List to store the results for all treatment arms
+all_results <- list()
+
+# Loop through each arm
+for (treatment in treatment_arms) {
+  
+  # Filter metadata for the current treatment arm
+  metadata_filtered <- metadata %>%
+    filter(Treatment_Arm == treatment) %>%
+    select("Sample_id", "Unique_ID", "Day")
+  
+  # Set row names for metadata
+  row.names(metadata_filtered) <- metadata_filtered$Sample_id
+  
+  # Get the corresponding BTM activity object for the current treatment arm
+  activity_data <- btm_activity_objects[[treatment]]
+  
+  # Set row names for activity data and transpose
+  row.names(activity_data) <- activity_data$external_gene_name
+  activity_data <- activity_data[-1]
+  activity_score <- t(activity_data)
+  
+  # Combine metadata with activity scores
+  meta_score <- cbind(metadata_filtered, activity_score)
+  
+  # Clean col names for plotting
+  names(meta_score)[4:ncol(meta_score)] <- gsub("[[:punct:]]", "", names(meta_score)[4:ncol(meta_score)])
+  names(meta_score)[4:ncol(meta_score)] <- gsub(" ", "_", names(meta_score)[4:ncol(meta_score)])
+  
+  # Convert Day to a factor to set levels
+  meta_score$Day <- factor(meta_score$Day, levels = c("D1", "D5"))
+  
+  # Empty list to store results for this treatment arm
+  results_list <- list()
+  
+  # Loop through each column for Wilcoxon test
+  columns_to_test <- names(meta_score)[4:ncol(meta_score)]
+  for (col in columns_to_test) {
+    data_subset <- meta_score[[col]]
+    if (length(unique(data_subset[!is.na(data_subset)])) > 1) {
+      test <- meta_score %>%
+        wilcox_test(as.formula(paste(col, "~ Day")), paired = TRUE) %>%
+        add_xy_position(x = "Day")
+      results_list[[col]] <- test
+    } else {
+      cat("Skipping column", col, "as it has less than two unique non-NA values.\n")
+    }
+  }
+  
+  # Combine results into a single dataframe
+  results_df <- do.call(rbind, results_list)
+  results_df$groups <- NULL
+  
+  # Add to the overall results list with the treatment arm as the name
+  all_results[[treatment]] <- results_df
+}
+
+# Access individual results
+toz_results <- all_results[["Tozorakimab"]]
+bem_results <- all_results[["Bemcentinib"]]
+zil_results <- all_results[["Zilucoplan"]]
+soc_results <- all_results[["Standard of Care"]]
+
+# Save all results as an R object
+save(soc_results,bem_results,toz_results,zil_results, 
+     file = "btm_treatment_results.Rdata")
+
+
+```
+
+## Plot number of BTM between Day 1 and Day 5
+Determine how many BTMs are significantly different between Day 1 and Day 5 for each treatment arm and plot
+
+```{r}
+
+# List to store significant results for each treatment arm
+significant_results_list <- list()
+
+# Loop through each treatment arm to get only significant results
+for (treatment in treatment_arms) {
+  # Get the results dataframe for the treatment arm
+  treatment_results <- all_results[[treatment]]
+  
+  # Filter for significant modules (p < 0.05)
+  significant_results <- subset(treatment_results, p < 0.05)
+  
+  # Check if significant_results is not empty
+  if (nrow(significant_results) > 0) {
+    # Order by p-value
+    significant_results <- significant_results[order(significant_results$p), ]
+    
+    # Add a factor for module names and treatment arm for later grouping
+    significant_results$.y.<- factor(significant_results$.y., levels = significant_results$.y.)
+    significant_results$Treatment_Arm <- treatment
+    
+    # Reverse the levels of the module factor for consistent plotting
+    significant_results$.y. <- factor(significant_results$.y., levels = rev(levels(significant_results$.y.)))
+    
+    # Add to the list
+    significant_results_list[[treatment]] <- significant_results
+  } else {
+    # If no significant results, create an empty dataframe with the same structure
+    significant_results_list[[treatment]] <- data.frame(module = character(),
+                                                        p = numeric(),
+                                                        Treatment_Arm = character())
+    cat("No significant results for", treatment, "\n")
+  }
+}
+
+# Create a summary dataframe for the number of significant modules
+total_variable_number <- data.frame(
+  Treatment_Arm = treatment_arms,
+  Number_of_Variables = sapply(significant_results_list, function(x) nrow(x))
+)
+
+# Reorder the levels of the Treatment_Arm factor for the plot
+desired_order <- c("Standard of Care", "Bemcentinib", "Tozorakimab", "Zilucoplan")
+total_variable_number$Treatment_Arm <- factor(total_variable_number$Treatment_Arm, levels = desired_order)
+
+# Plot the summary
+ggplot(total_variable_number, aes(x = Treatment_Arm, y = Number_of_Variables, fill = Treatment_Arm)) +
+  geom_bar(stat = "identity", color = "black") +
+  geom_text(aes(label = Number_of_Variables), vjust = -0.5, color = "black", size = 3) +  # Add text labels
+  labs(title = "Significant Blood Transcription Modules",
+       x = "",
+       y = "Number of Modules") +
+  theme_bw() +
+  scale_fill_manual(values = alpha(colors, 0.6)) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 150)) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        legend.position = "right")
+
+```
+
+
+## BTM categories
+
+Plotting stacked barchart of each defined category to determine which immune/celll categories are most significant between groups. 
+
+Category file included in Rdata file was manually curated, where the list of modules were assigned to specific immune cell or immune/biological categories based on the module name.
+
+```{r}
+
+toz_significant_results <- significant_results_list[["Tozorakimab"]]
+bem_significant_results <- significant_results_list[["Bemcentinib"]]
+zil_significant_results <- significant_results_list[["Zilucoplan"]]
+soc_significant_results <- significant_results_list[["Standard of Care"]]
+all_results <- bind_rows(bem_significant_results, toz_significant_results, zil_significant_results, soc_significant_results)
+
+# Keep significant ones - should already be sig only but good to double check here
+significant_results <- all_results %>%
+  filter(p <0.05)
+
+# Subset the dataframe to remove columns with all NA values
+btm_module_categories <- btm_module_categories[, colSums(!is.na(btm_module_categories)) > 0, drop = FALSE]
+
+# Reshape the category dataframe to long format
+category_long <- btm_module_categories %>%
+  pivot_longer(everything(), names_to = "Category", values_to = "Variable") %>%
+  filter(!is.na(Variable) & Variable != "")  # Filter out empty or NA values in the Variable column
+
+# Join significant_results with category_long based on matching variables
+significant_results_long<- significant_results %>%
+  left_join(category_long, by = c(".y." = "Variable"))
+# Count the occurrences of each Category for each Treatment_Arm
+category_counts <- significant_results_long %>%
+  group_by(Treatment_Arm, Category) %>%
+  summarise(Count = n())
+
+#Calculate sums for each category
+category_sums <- aggregate(Count ~ Category, data = category_counts, FUN = sum)
+# Merge sums with original data
+category_counts <- merge(category_counts, category_sums, by = "Category", suffixes = c("", "_sum"))
+#this oesn't show the UNIQUE number of categories (as there are some overlaps)
+
+# Reorder the Category variable based on the Number_of_Variables values in reverse order
+category_counts$Count_sum[is.na(category_counts$Count_sum)] <- 0
+category_counts$Category <- fct_reorder(category_counts$Category, category_counts$Count_sum, .desc = FALSE)
+# Plot the bar plot
+#Define the desired order of Treatment_Arm levels and corresponding colors
+desired_order <- c("Standard of Care", "Bemcentinib", "Tozorakimab", "Zilucoplan")
+colors <- c("skyblue", "forestgreen", "yellow", "red")
+
+# Convert Treatment_Arm to a factor with desired order
+category_counts$Treatment_Arm <- factor(category_counts$Treatment_Arm, levels = desired_order)
+category_counts$Category <- str_replace(category_counts$Category, "(\\w)(cell)", "\\1 cell")  # Add space before "Cell" if preceded by a word
+category_counts$Category <- gsub("[[:punct:]]", " ", category_counts$Category)  # Remove punctuation
+ggplot(category_counts, aes(x = Count, y = Category, fill = Treatment_Arm)) +
+  geom_bar(stat = "identity", position = "stack", color="black") +
+  labs(y = "", x = "Number of modules", fill = "Treatment Arm") +
+  ggtitle("Number of Categories for Each Treatment Arm")+
+  theme_bw() +
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 35)) +
+  theme(plot.margin = margin(0.5,0.5,0.5,0.5, "cm"))+
+  scale_fill_manual(values = alpha(colors, 0.6)) + 
+  scale_y_discrete(limits=rev)+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        #axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+        legend.position = "right",
+        plot.title.position = "plot")
+```
+
+
+## BTM overlap between treatment arms
+
+look at overlaps of BTM between treatment groups by creating a venn diagram. Can then extract each venn section to look at in more detail if necessary.
+
+
+```{r}
+# Create Venn diagram
+venn_list <- list(
+  Bem = bem_significant_results$.y.,
+  Toz = toz_significant_results$.y.,
+  Zil = zil_significant_results$.y.,
+  SoC = soc_significant_results$.y.
+)
+
+# Plot the Venn diagram
+venn.plot <- venn.diagram(
+  x = venn_list,
+  filename = NULL,
+  disable.logging = FALSE, 
+  margin = 0.09,
+  category.names = c("Bemcentinib", "Tozorakimab",  "Zilucoplan","Standard of Care"),
+  #circles
+  fill = c(alpha('forestgreen', 0.5),  alpha('#fde725ff', 0.5),alpha('red', 0.6), alpha('skyblue', 0.9)),
+  #numbers
+  print.mode = c("raw", "percent"),
+  cex = 0.8,
+  #fontface = "italic",
+  fontfamily = "sans",
+  # ext.text=FALSE,
+  ext.length = 0.5,
+  ext.pos = 90,
+  ext.percent = 0.005,
+  # Set names
+  cat.cex = 1,
+  cat.fontface = "bold",
+  cat.fontfamily = "sans",
+  cat.default.pos = "outer")
+
+# Display the Venn diagram
+grid.newpage()
+grid.draw(venn.plot)
+```
+
+
+
+
+
+# Gene Set enrchment analysis of gene expression data using BTM as gene sets
+For this, will use the differential expression data from 03_differential_analysis files for each of the treatment arms.
+We will also use the BTM gene set file included in Li et al 2014 (BTM_for_GSEA_20131008.gmt) https://github.com/shuzhao-li/BTM
+
+```{r}
+#load data DEG data 
+# Read Bem, MEDI, and Zil datasets
+bem_degs <- read.table("Bemcentinib_Day5_vs_Day1_results.txt", sep = "\t", header = TRUE, row.names = 1)
+toz_degs <- read.table("Tozorakimab_Day5_vs_Day1_results.txt", sep = "\t", header = TRUE, row.names = 1)
+zil_degs <- read.table("Zilucoplan_Day5_vs_Day1_results.txt", sep = "\t", header = TRUE, row.names = 1)
+soc_degs<-read.table("Standard_of_Care_Day5_vs_Day1_results.txt", sep = "\t", header = TRUE, row.names = 1)
+
+# Create metric for ranking
+bem_degs$metric <- -log10(bem_degs$PValue) / sign(bem_degs$logFC)
+toz_degs$metric <- -log10(toz_degs$PValue) / sign(toz_degs$logFC)
+zil_degs$metric <- -log10(zil_degs$PValue) / sign(zil_degs$logFC)
+soc_degs$metric <- -log10(soc_degs$PValue) / sign(soc_degs$logFC)
+
+# Create ranked list for each treatment arm using new metric
+#here using pvalue and not adjusted/FDR p as this will results in fewer ties 
+bem_ranks <- bem_degs$metric 
+names(bem_ranks) <- bem_degs$gene_name 
+bem_ranks <- sort(bem_ranks, decreasing = TRUE)
+
+toz_ranks <- toz_degs$metric 
+names(toz_ranks) <- toz_degs$gene_name 
+toz_ranks <- sort(toz_ranks, decreasing = TRUE)
+
+zil_ranks <- zil_degs$metric 
+names(zil_ranks) <- zil_degs$gene_name 
+zil_ranks <- sort(zil_ranks, decreasing = TRUE)
+
+soc_ranks <- soc_degs$metric 
+names(soc_ranks) <- soc_degs$gene_symbol 
+soc_ranks <- sort(soc_ranks, decreasing = TRUE)
+
+
+
+# Load pathways
+#for this, using the BTM pathway file
+pathways <- gmtPathways("BTM_for_GSEA_20131008.gmt")
+
+
+
+#pathways table needs converting into df for GSEA
+# Convert list to tibble
+pathways_tbl <- tibble(pathway = names(pathways), genes = pathways)
+pathways_unnested<-as.data.frame(pathways_tbl)
+set.seed(1234)
+```
+
+
+```{r}
+# Perform GSEA using clusterProfiler
+bem_GSEA <- GSEA(bem_ranks, TERM2GENE = pathways_unnested, seed = TRUE)
+toz_GSEA <- GSEA(toz_ranks, TERM2GENE = pathways_unnested, seed = TRUE)
+zil_GSEA <- GSEA(zil_ranks, TERM2GENE = pathways_unnested, seed = TRUE)
+soc_GSEA <- GSEA(soc_ranks, TERM2GENE = pathways_unnested, seed = TRUE)
+# save GSEA results to read back in if necessary
+#save(bem_GSEA, toz_GSEA,zil_GSEA, soc_GSEA, file = "btm_GSEA.Rdata")
+
+# Plot dotplot for Bem, MEDI, and Zil
+dotplot(bem_GSEA, showCategory = 10, split = ".sign") + facet_grid(. ~ .sign)
+dotplot(toz_GSEA, showCategory = 10, split = ".sign") + facet_grid(. ~ .sign)
+dotplot(Zil_GSEA, showCategory = 10, split = ".sign") + facet_grid(. ~ .sign)
+dotplot(soc_GSEA, showCategory = 10, split = ".sign") + facet_grid(. ~ .sign)
+```
+
+
+## Visualise enriched BTM across treatment arms
+
+Here will be visualizing the enriched BTM that are specifically assoicated with a cell type to detemrine enrichment of cellular activation in the samples
+
+```{r}
+#extract terms that match cells of interest
+# monocyte
+# B cells
+# T cells
+# NK cells
+# Neutrophils
+# plasma cell
+# lymphocyte
+# DC
+# dendritic cell
+#  myeloid
+#platelets
+#thymocyte
+
+# Function to extract rows cntaining specified keywords and add a new column for cell type
+extract_keywords <- function(data, keywords) {
+  # Initialize an empty dataframe to store the extracted rows
+  extracted_data <- data.frame(matrix(ncol = ncol(data) + 1, nrow = 0))
+  colnames(extracted_data) <- c(colnames(data), "cell_type")
+  
+  # Loop through each keyword and extract matching rows
+  for (keyword in keywords) {
+    pattern <- paste0("\\b", keyword, "\\b")  # Word boundary for exact match
+    matching_rows <- data[grep(pattern, data$ID), ]
+    if (nrow(matching_rows) > 0) {
+      matching_rows$cell_type <- keyword
+      extracted_data <- rbind(extracted_data, matching_rows)
+    }
+  }
+  
+  # Remove duplicates
+  extracted_data <- unique(extracted_data)
+  
+  return(extracted_data)
+}
+
+# Define keywords - spelling differs so need to capture all iterations of each 
+keywords <- c("monocyte", "monocytes", "Monocyte", "B cells", "B cell", "T cells", "T cell", "thymocyte", "thymocytes", "Thymocyte",
+              "Thymocytes", "NK cells", "NK cell",
+              "Neutrophils", "Neutrophil","neutrophils", "neutrophil", "plasma cell", "lymphocyte", "DC", "DCs", 
+              "dendritic cell", "dendritic cells","myeloid", "platelet", "Plasma cell", "plasma cell", "Plasma cells", "plasma cells")
+
+
+
+# Read and extract keywords for each dataframe
+bem_GSEA_cell <- extract_keywords(bem_GSEA, keywords)
+bem_GSEA_cell$Treatment <- "Bemcentinib"
+toz_GSEA_cell <- extract_keywords(toz_GSEA, keywords)
+toz_GSEA_cell$Treatment <- "Tozorakimab"
+zil_GSEA_cell <- extract_keywords(zil_GSEA, keywords)
+zil_GSEA_cell$Treatment<- "Zilucoplan"
+soc_GSEA_cell <- extract_keywords(soc_GSEA, keywords)
+soc_GSEA_cell$Treatment<- "SoC"
+
+######## plot all 4 arms ######################
+combined_cell<-rbind(bem_GSEA_cell, toz_GSEA_cell, zil_GSEA_cell, soc_GSEA_cell)
+#subset to keep 
+combined_cell <- combined_cell[, c("ID", "NES",  "qvalue", "Treatment","cell_type")]
+
+
+#want to delete certain cells where "myeloid" overlaps with othercell types
+table(combined_cell$ID, combined_cell$cell_type)
+# Define the IDs to match
+ids_to_remove <- c("myeloid, dendritic cell activation via NFkB (II) (M43.1)",
+                   "myeloid, dendritic cell activation via NFkB (I) (M43.0)",
+                   "proinflammatory dendritic cell, myeloid cell response (M86.1)",
+                   "enriched in myeloid cells and monocytes (M81)", 
+                   "enriched in activated dendritic cells/monocytes (M64)", 
+                   "plasma cells & B cells, immunoglobulins (M156.0)")
+
+# need to remove duplicated ids - where there are more than one cell type
+combined_cell <- combined_cell[!(combined_cell$cell_type == "myeloid" & combined_cell$ID %in% ids_to_remove), ]
+combined_cell <- combined_cell[!(combined_cell$cell_type == "monocytes" & combined_cell$ID %in% ids_to_remove), ]
+combined_cell <- combined_cell[!(combined_cell$cell_type == "B cells" & combined_cell$ID %in% ids_to_remove), ]
+
+
+# also neeed to redefine the following term as myeloid - because it has multiple cell types
+#Identify the row index with the specified ID
+row_index <- which(combined_cell$ID == "enriched in activated dendritic cells/monocytes (M64)")
+# Change
+combined_cell$cell_type[row_index] <- "Myeloid"
+
+
+# Replace terms in the cell_type column of combined_cell
+combined_cell$cell_type <- gsub("\\bmonocyte\\b", "Monocytes", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bmonocytes\\b", "Monocytes", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bMonocyte\\b", "Monocytes", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bB cell\\b", "B cells", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bT cell\\b", "T cells", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bdendritic cells\\b", "Dendritic cells", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bdendritic cell\\b", "Dendritic cells", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bDC\\b", "Dendritic cells", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bNK cell\\b", "NK cells", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bNK cells\\b", "NK cells", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bmyeloid\\b", "Myeloid", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bneutrophils\\b", "Neutrophils", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bneutrophil\\b", "Neutrophils", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bplatelet\\b", "Platelets", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bthymocytes\\b", "T cells", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bPlasma cell\\b", "B cells", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\bplasma cells\\b", "B cells", combined_cell$cell_type)
+combined_cell$cell_type <- gsub("\\blymphocyte\\b", "B cells", combined_cell$cell_type)
+
+
+
+combined_cell$cell_type
+#write.csv(combined_cell,"C:/Users/ja2y21/OneDrive - University of Southampton/PostDoc/Projects/EME COVID/Data/Analysis/BTM/Results/GSEA/treatment_combined_cell_type_terms.csv")
+```
+
+Plot enriched cell types
+```{r}
+#plot all treatment arms
+#with two facets - one as cell type and one as treatment arm
+# y axis is terms, x axis is NES score, fill is adj pvalue or qvalue 
+#background colour is drug arm 
+combined_cell$cell_type<-as.character(combined_cell$cell_type)
+#add colour column 
+treatment_colors <- c(Bemcentinib = "forestgreen",
+                      Tozorakimab = "yellow",
+                      Zilucoplan = "red", 
+                      SoC = "skyblue")
+
+
+# Add a new column 'colour' based on the values in the 'Treatment' column
+combined_cell <- combined_cell %>%
+  mutate(colour = treatment_colors[Treatment])
+
+
+#This code is if we need to wrap the facet label titles
+# swr = function(string, nwrap=10) {
+#   paste(strwrap(string, width=nwrap), collapse="\n")
+# }
+# swr = Vectorize(swr)
+# # Create line breaks 
+# combined_cell$ID = swr(combined_cell$ID)
+
+#create levels for colouring facets
+treatment_levels <- unique(combined_cell$Treatment)
+cell_levels <- unique(combined_cell$cell_type)
+
+# Create a data frame with all possible combinations of Treatment and Trait
+colours <- expand.grid(Treatment = treatment_levels, cell_type = cell_levels)
+
+# Add Corr and Modules columns
+colours$NES <- 1
+colours$ID <- 1
+
+# Add a new column 'colour' based on the values in the 'Treatment' column
+colours <- colours %>%
+  mutate(colour = treatment_colors[Treatment])
+
+
+#set levels in treatment
+# Define the desired order of levels
+desired_levels <- c("SoC","Bemcentinib", "Tozorakimab", "Zilucoplan")
+
+# Reorder the levels of the Treatment factor variable
+combined_cell$Treatment <- factor(combined_cell$Treatment, levels = desired_levels)
+
+colnames(combined_cell)
+combined_cell$cell_type
+combined_cell$cell_type <- factor(combined_cell$cell_type, levels = c( "B cells","T cells", "NK cells", "Platelets", "Myeloid","Dendritic cells", "Monocytes",  "Neutrophils"))
+combined_cell$cell_type
+# Check for NAs in the combined_cell$cell_type column
+any_na <- any(is.na(combined_cell$cell_type))
+
+# Print the result
+if (any_na) {
+  print("There are NAs in the combined_cell$cell_type column.")
+} else {
+  print("There are no NAs in the combined_cell$cell_type column.")
+}
+
+combined_cell$NES<-as.numeric(combined_cell$NES) #make sure NES is numeric for plottinh
+```
+
+
+Plot bubble plot - this code is for all four treatment arms. To plot drug arms only, only
+combine the drug dfs and edit subsequent code pertaining to fourth soc arm. To plot only
+SoC, do the opposite and remove any code pertaining to the drugs.
+
+```{r, fig.width= 10, fig.height=10}
+#plot dotplot
+width_scale<-6
+ggplot(combined_cell, aes(x = Treatment, y = ID, size = -log10(qvalue), fill = NES)) +
+  geom_rect(data = colours, inherit.aes = FALSE, aes(xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf), fill = colours$colour, alpha = 0.15) + 
+  geom_point(aes(fill = NES), shape = 21) +
+  theme_bw() +
+  scale_fill_distiller(palette = "RdBu", limits = c(-3, 3))+
+  scale_size_continuous(name = "-log10(qvalue)") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(),
+        axis.title.x = element_blank(), axis.title.y = element_blank(), axis.text = element_text(size = 12),
+        axis.text.x.bottom = element_blank(), axis.ticks.x = element_blank()) +
+  facet_grid(cell_type ~ Treatment, scales = "free", space = "free", switch = "y") +
+  scale_y_discrete(position = "right") +
+  theme(legend.text=ggplot2::element_text(size=width_scale),
+        legend.box.margin = margin(6, 6, 6, 6),
+        legend.title=ggplot2::element_text(size=1.5*width_scale,face="bold"),
+        legend.position="bottom",
+        legend.key.size = grid::unit(width_scale/50, "inch"),
+        legend.key.width = grid::unit(width_scale/50, "inch"))
+
+```
+
+
+## Plotting BTM activity scores as heatmap
+
+As per manuscript figure, the SoC arm BTM activity scores were visualised as a heatmap
+
+
+```{r}
+#need activity scores for soc arm - read back in saved file if needed
+SoC_activity_score<-read.table("SoC_BTM_activity.txt",header = TRUE, sep = "\t", fill = TRUE, row.names=1)
+# Remove punctuation from row names to match the results df which already has had the punctiation removed
+rownames(SoC_activity_score) <- gsub("[[:punct:]]", "", rownames(SoC_activity_score))
+# Relace blank spaces with underscores in row names
+rownames(SoC_activity_score) <- gsub(" ", "_", rownames(SoC_activity_score))
+#filter to keep the sig ones only
+results_df<-read.csv("SoC_BTM_activty_Day_stat_test_result.csv")
+
+##extract only significant ones
+significant_results <- subset(results_df, p <0.05)
+# Filter significant results
+# Extract the unique values from the ".y." column in significant_results
+unique_values <- unique(significant_results$.y.)
+# Filter row names of SoC_activity_score based on unique values
+filtered_row_names <- rownames(SoC_activity_score)[rownames(SoC_activity_score) %in% unique_values]
+# Filter SoC_activity_score based on filtered row names
+significant_SoC_activity_score <- SoC_activity_score[filtered_row_names, ]
+
+
+#using vst data for this
+heat_data<-(significant_SoC_activity_score)
+heat_data<-as.data.frame(heat_data)
+# need to scale vst counts - so can get a range for heatmap
+#scale data across rows to get z-scores
+scaled_data<-t(scale(t(heat_data)))
+#transform data into matrix for heatmap to read
+mat<-data.matrix(scaled_data)
+
+
+
+# now to make pretty
+#create colour pallete for all
+col = circlize::colorRamp2(c(-3, 0, 3), hcl_palette ="RdYlBu", reverse = TRUE)
+
+#create column annotation
+#need soc meta
+SoC_metadata<- metadata %>%
+    filter(Treatment_Arm == "Standard of Care") %>%
+    select("Sample_id", "Unique_ID", "Day", "Sustained_Clinical_Response_by_D29","Death_by_D29", "Death_or_Respiratory_Failure_at_D29")
+row.names(SoC_metadata)<-SoC_metadata$Sample_id
+
+# Check if column names of heat_data are in the same order as row names of metadata_filtered
+all.equal(colnames(heat_data), rownames(SoC_metadata))
+#NO
+# Order SoC_metadata_filtered by row names alphabetically
+SoC_metadata_sorted <- SoC_metadata[order(rownames(SoC_metadata)), ]
+# Check  order
+all.equal(colnames(heat_data), rownames(SoC_metadata_sorted))
+#[1] TRUE
+
+#################################################################
+# Extract row names from the original data frame
+row_names <- rownames(SoC_metadata_sorted)
+annotation_col = data.frame(
+  Day = SoC_metadata_sorted$Day, 
+  Sustained_Clinical_Response_by_D29 = SoC_metadata_sorted$Sustained_Clinical_Response_by_D29,
+  Death_or_Respiratory_Failure_at_D29=SoC_metadata_sorted$Death_or_Respiratory_Failure_at_D29,
+  Death_by_D29 = SoC_metadata_sorted$Death_by_D29,
+  row.names = row_names)
+
+
+ann_colours<-list("Day"=c("D1"="darkgreen", 
+                          "D5"="mediumpurple"), 
+                  "Sustained_Clinical_Response_by_D29"=c("Yes"="skyblue", 
+                                                         "No"="orange"), 
+                  "Death_or_Respiratory_Failure_at_D29"=c("Yes"="coral", 
+                                                         "No"="lightyellow"), 
+                  "Death_by_D29"=c("Yes"="deeppink3", 
+                                  "No"="darkslategrey"))
+#now change col names so can read better in the plot
+# Define new column names
+new_col_names <- c("Day", "Sustained\nClinical Response", "Death or\nRespiratory Failure", "Death")
+# Assign new column names to annotation_col
+colnames(annotation_col) <- new_col_names
+# Define new names for the list elements based on annotation_col column names
+new_names <- colnames(annotation_col)
+# Rename the list elements in ann_colours
+names(ann_colours) <- new_names
+
+
+#also modify mat names for plotting
+# Custom function to modify row names
+modify_row_names <- function(row_names) {
+  # Split the row names by '_'
+  split_names <- strsplit(row_names, "_")
+  modified_names <- character(length(split_names))
+  
+  for (i in seq_along(split_names)) {
+    last_string <- split_names[[i]][length(split_names[[i]])]  # Extract the last string
+    # Insert '.' after the 4th character if the last string is longer than 4 characters
+    if (nchar(last_string) > 4) {
+      last_string <- paste(substr(last_string, 1, 4), ".", substr(last_string, 5, nchar(last_string)), sep = "")
+    }
+    # Enclose the last string in parentheses
+    last_string <- paste0("(", last_string, ")")
+    # Remove '_' and replace with blank spaces
+    modified_last_string <- gsub("_", " ", last_string)
+    
+    # Combine modified last string with the rest of the strings
+    modified_names[i] <- paste(split_names[[i]][-length(split_names[[i]])], collapse = " ")
+    modified_names[i] <- paste(modified_names[i], modified_last_string)
+  }
+  
+  return(modified_names)
+}
+
+# Apply custom function to row names
+new_row_names <- modify_row_names(rownames(mat))
+
+# Assign modified row names to the matrix
+rownames(mat) <- new_row_names
+
+
+```
+
+```{r fig.width=15, fig.height=15}
+set.seed(1234)
+ht<-ComplexHeatmap::pheatmap(mat, name="z_score",
+                             # show_row_names = FALSE, # shows gene names
+                             #show_row_dend=TRUE,
+                            column_split = annotation_col$`Sustained\nClinical Response`, #splits col by group of interest
+                             #cluster_cols=FALSE,
+                             column_title="SoC significant BTM",
+                             #column_title_side="top",
+                             column_title_gp=gpar(fontsize=15, fontface="bold"),
+                             column_title_rot=0,
+                             #treeheight_col = 25,
+                             #column_km=2,
+                             row_km=3,
+                             row_gap = unit(c(3, 3), "mm"),
+                             #row_names_rot = 0, #rotate row names
+                             #row_names_side = "left",
+                             heatmap_legend_param = list(
+                                  legend_direction = "horizontal", 
+                                  legend_width = unit(5, "cm"),
+                               title= "Z-score"),
+                             border = TRUE,
+                             border_color = "darkgrey",
+                             cellheight = 15,
+                             cellwidth = 15,
+                             fontsize = 14,
+                             show_colnames = FALSE,
+                             col=col,
+                             annotation_col = annotation_col,
+                             annotation_colors = ann_colours,
+                             annotation_names_col = F)
+
+draw(ht,heatmap_legend_side ="bottom", annotation_legend_side = "left")
+
+
+
+
+
+
+```
+

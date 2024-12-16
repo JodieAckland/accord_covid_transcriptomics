@@ -1,0 +1,330 @@
+---
+title: "07_Cellular_deconvolution"
+#output: html_notebook
+---
+# Asessing cellular composition of samples
+Two ways - 
+1. in silico deconvolution using CIBERSORTx (https://cibersortx.stanford.edu/)
+2. using gold standard laboratory cell countts from ACCORD trial hematology data
+
+
+# Load libraries
+
+```{r message=FALSE}
+# Packages to load
+packages <- c(
+ "flextable", "ggplot2", "ggpubr", "gtsummary", "RColorBrewer", "tidyverse")
+
+
+############################################################################################################
+load_libraries <- function(packages) {
+  for (package in packages) {
+    if (!require(package, character.only = TRUE)) {
+      install.packages(package)
+      library(package, character.only = TRUE)
+    }
+  }
+}
+
+# Load all packages
+load_libraries(packages)
+
+```
+# Plotting aesthetics
+
+```{r}
+#set colour scheme for stacked plot
+
+n <- 60
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+pie(rep(1,n), col=sample(col_vector, n))
+col_graph<-as.data.frame(col_vector)
+```
+
+# Load data
+
+```{r}
+load("./data_files/cibersort_and_cell_counts.Rdata")
+```
+
+
+## CIBERSORTx
+
+Deconvolution of the bulk RNASeq data was performed using CIBERSORTx online. Normalised
+counts for each of the treatment arm extracted from the DE analysis were used as input to CIBERSORTx (https://cibersortx.stanford.edu/)
+Job results were downloaded for processing and analysis in R. 
+csort_combo contains these results for treatment arms combined into a single df, with additional metadata of interest
+
+First look at Standard of Care arm between day 1 and day 5 and between responders
+
+```{r message=FALSE}
+soc_tbl <- csort_combo %>%
+  filter(Treatment_Arm == "Standard of Care")%>% 
+  select(Treatment_Arm, Day, Unique_ID, 2:23) %>% 
+  tbl_strata(strata = Treatment_Arm, 
+             ~.x %>%
+               tbl_summary(by = Day, include = -Unique_ID, type = list(where(is.numeric) ~ "continuous")) %>% 
+               modify_caption("Table 1. Comparison between Day 1 and Day 5 - Standard of Care") %>% 
+               add_p(~ "paired.wilcox.test", group=Unique_ID) %>%
+               bold_p(t = 0.05) %>%
+               italicize_levels()) 
+print(soc_tbl)
+
+soc_tbl_response <- csort_combo %>% 
+  filter(Treatment_Arm == "Standard of Care")%>% 
+  select(Treatment_Arm, Sustained_Clinical_Response_by_D29, 2:23) %>% 
+  tbl_strata(strata = Treatment_Arm, 
+             ~.x %>%
+               tbl_summary(by = Sustained_Clinical_Response_by_D29, type = list(where(is.numeric) ~ "continuous")) %>% 
+               modify_caption("Table 2. Comparison between Responders - Standard of Care") %>% 
+               add_p(~ "wilcox.test") %>%
+               bold_p(t = 0.05) %>%
+               italicize_levels())
+print(soc_tbl_response)
+```
+
+
+Now Treatment Arms 
+
+```{r message=FALSE}
+
+# bemcentinib
+bem_tbl <- csort_combo %>% 
+  filter(Treatment_Arm == "Bemcentinib")%>% 
+  select(Treatment_Arm, Day, Unique_ID, 2:23) %>% 
+  tbl_strata(strata = Treatment_Arm, 
+             ~.x %>%
+               tbl_summary(by = Day, include = -Unique_ID, type = list(where(is.numeric) ~ "continuous")) %>% 
+               modify_caption("Table 3. Comparison between Day 1 and Day 5 - Bemcentinib") %>% 
+               add_p(~ "paired.wilcox.test", group=Unique_ID) %>%
+               bold_p(t = 0.05) %>%
+               italicize_levels()) 
+print(bem_tbl)
+
+# Tozorakimab
+toz_tbl <- csort_combo %>% 
+  filter(Treatment_Arm == "Tozorakimab")%>% 
+  select(Treatment_Arm, Day, Unique_ID, 2:23) %>% 
+  tbl_strata(strata = Treatment_Arm, 
+             ~.x %>%
+               tbl_summary(by = Day, include = -Unique_ID, type = list(where(is.numeric) ~ "continuous")) %>% 
+               modify_caption("Table 4. Comparison between Day 1 and Day 5 - Tozorakimab") %>% 
+               add_p(~ "paired.wilcox.test", group=Unique_ID) %>%
+               bold_p(t = 0.05) %>%
+               italicize_levels()) 
+print(toz_tbl)
+
+# Zilucoplan
+zil_tbl <- csort_combo %>% 
+    filter(Treatment_Arm == "Zilucoplan")%>% 
+  select(Treatment_Arm, Day, Unique_ID, 2:23) %>% 
+  tbl_strata(strata = Treatment_Arm, 
+             ~.x %>%
+               tbl_summary(by = Day, include = -Unique_ID, type = list(where(is.numeric) ~ "continuous")) %>% 
+               modify_caption("Table 5. Comparison between Day 1 and Day 5 - Zilucoplan") %>% 
+               add_p(~ "paired.wilcox.test", group=Unique_ID) %>%
+               bold_p(t = 0.05) %>%
+               italicize_levels()) 
+print(zil_tbl)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+Now plotting 
+- First plot stacked bar charts for each individual sample counts for each arm
+- Second, plot stacked bar chart showing summarised data for all samnples within each arm
+- Third, plot only treatment arms for paper figure
+- Fourth plot only standard of care for paper figure
+
+```{r fig.height=15, fig.width = 12}
+
+## STACKED BAR CHART individual samples
+csort_longer<- csort_combo %>% pivot_longer(c(2:23),
+                                           names_to = "Cell_Type",
+                                           values_to = "Prop")
+
+csort_longer <- csort_combo %>%
+  pivot_longer(
+    cols = 2:23,                    # Columns to pivot
+    names_to = "Cell_Type",         # Name for the new key column
+    values_to = "Prop"              # Name for the new value column
+  )
+
+#generate percentages
+csort_longer$Percentages <- csort_longer$Prop * 100
+csort_longer<-csort_longer%>%
+  mutate(Unique_ID = str_extract(Mixture, "(?<=_)[^_]+(?=_[^_]+$)")) # get unique ID
+
+
+#view indiviual samples for each arm
+ggplot(csort_longer, aes(x = Mixture, y = Percentages, fill = Cell_Type)) +
+  geom_bar(stat = "identity", position="stack") +
+  labs(x = "Samples", y = "Percentage", fill = "Cell Type") +
+  theme_bw(base_size = 14) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  #theme(axis.text.y=element_text(size=14)) +
+  #theme(axis.text.x=element_text(size=10, angle = 45, hjust =1)) +
+  theme(axis.text.x=element_blank()) +
+  theme(axis.ticks = element_blank())+
+  facet_wrap(~Treatment_Arm+Day, scales="free", ncol=2)+
+  scale_fill_manual(values=col_vector[c(1:3, 9:60)])+
+  scale_y_continuous(expand = c(0,0), limits = c(0, 101))+
+  guides(fill = guide_legend(ncol = 1))
+
+#Now want to plot summarised cell counts for each day for ech treatment group
+# Aggregate  data to calculate the median percentages
+csort_median <- csort_longer %>%
+  group_by(Treatment_Arm, Day, Sustained_Clinical_Response_by_D29, Cell_Type, Unique_ID) %>%
+  summarise(Median_Percentage = median(Percentages, na.rm = TRUE))
+
+# Normalize the median percentages so they sum to 100% for each Treatment_Arm and Day
+csort_normalized <- csort_median %>%
+  group_by(Treatment_Arm, Day) %>%
+  mutate(Normalized_Percentage = Median_Percentage / sum(Median_Percentage) * 100)
+
+# Set the levels for the "Day" column
+csort_normalized$Day <- factor(csort_normalized$Day, levels = c("D1", "D5"))
+
+# Set the levels of the "Drug_Arm" column
+#change MEDI£506 to Tozorakimab here for lotting
+csort_normalized$Treatment_Arm <- factor(csort_normalized$Treatment_Arm, levels = c("Standard of Care", "Bemcentinib", "Tozorakimab", "Zilucoplan"))
+
+
+ggplot(csort_normalized, aes(x = Day, y = Normalized_Percentage, fill = Cell_Type)) +
+  geom_bar(stat = "identity", position="stack") +
+  labs(x = "Day", y = "Percentage", fill = "Cell Type") +
+  theme_bw(base_size = 14) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.text.x=element_text(size=14)) +
+  theme(axis.ticks = element_blank()) +
+  facet_wrap(~Treatment_Arm, scales="free", ncol=2) +
+  scale_fill_manual(values=col_vector[c(1:3, 9:60)]) +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 101)) +
+  guides(fill = guide_legend(ncol = 1))
+
+
+# Filter the data only to keep the drugs
+drug_data <- csort_normalized %>%
+  filter(Treatment_Arm != "Standard of Care")
+
+ggplot(drug_data, aes(x = Day, y = Normalized_Percentage, fill = Cell_Type)) +
+  geom_bar(stat = "identity", position="stack") +
+  labs(x = "Day", y = "Percentage", fill = "Cell Type") +
+  theme_bw(base_size = 14) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.text.x=element_text(size=14)) +
+  theme(axis.ticks = element_blank()) +
+  scale_fill_manual(values=col_vector[c(1:3, 9:60)]) +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 101)) +
+  guides(fill = guide_legend(ncol = 1))+
+  facet_wrap(~Treatment_Arm)
+
+# Now looking at SoC arm
+# Filter the data for the "Standard of Care" arm
+standard_of_care_data <- csort_normalized %>%
+  filter(Treatment_Arm == "Standard of Care")
+
+ggplot(standard_of_care_data, aes(x = Sustained_Clinical_Response_by_D29, y = Normalized_Percentage, fill = Cell_Type)) +
+  geom_bar(stat = "identity", position="stack") +
+  labs(x = "Sustained Clinical Response", y = "Percentage", fill = "Cell Type") +
+  theme_bw(base_size = 14) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.text.x=element_text(size=14)) +
+  theme(axis.ticks = element_blank()) +
+  scale_fill_manual(values=col_vector[c(1:3, 9:60)]) +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 101)) +
+  guides(fill = guide_legend(ncol = 1))
+
+
+
+
+
+```
+
+
+
+## Cell counts
+
+Using hematology data generated from laboratory cell counting of ACCORD samples
+Assessing cell counts for differences  according to responder status
+These cell counts are included within the cibersort_and_cell_counts.Rdata file
+
+```{r message=FALSE, fig.width=15, fig.height=6}
+
+# Keep only distinct Unique_IDs for SoC only- removes duplicate rows for the same patient as there will be two d1 and d5 sample ids per unique_id
+
+soc_counts <- cell_counts_meta %>%
+  filter(Treatment_Arm == "Standard of Care") %>%
+  distinct(Unique_ID, .keep_all = TRUE)  # Keeps the first occurrence of each Unique_ID
+
+# pivot longer for plotting
+soc_counts_percentage <- soc_counts %>%
+  select(
+    Unique_ID, 
+    Day, 
+    Treatment_Arm, 
+    Sustained_Clinical_Response_by_D29, 
+    starts_with(c("Screening", "Day_5_")) & ends_with("percentage")
+  )%>%
+  pivot_longer(
+    cols = 5:ncol(.),
+    names_to = "Cell_Type_Percentage",
+    values_to = "Percentages"
+  )
+
+# Extract time and cell type
+# Extract time
+soc_counts_percentage$Time <- sub("^Screening.*", "Screening", soc_counts_percentage$Cell_Type_Percentage)
+soc_counts_percentage$Time <- sub("^Day_(\\d+).*", "Day \\1", soc_counts_percentage$Time)
+# Extract cell type
+soc_counts_percentage$Cell_Type <- sub(".*_(\\w+)_percentage$", "\\1", soc_counts_percentage$Cell_Type_Percentage)
+# Set Unique_ID as character
+soc_counts_percentage$Unique_ID <- as.character(soc_counts_percentage$Unique_ID)
+# Set levels for Time
+soc_counts_percentage$Time <- factor(soc_counts_percentage$Time, levels = c("Screening", "Day 5"))
+
+
+# Generate plots
+ #set dodge for points
+ pd <- position_dodge(0.2)
+ 
+# Cell counts between Day 1 and Day 5 
+ ggplot(soc_counts_percentage, aes(x = Time, y = Percentages, fill = Time)) +
+   geom_boxplot(outlier.shape = NA, alpha=0.6) +
+   # geom_line(aes(group = Unique_ID, colour="grey"), position = pd) +
+   geom_point(aes(group=Unique_ID), size=3, shape=21, position = pd) +
+   labs(x = "Timepoint", y = "Percentage of total cell count", fill = "Time point") +
+   theme_bw(base_size = 14) +
+   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+   facet_wrap(~ Cell_Type, scales = "free", ncol = 5) +
+   scale_fill_manual(values = alpha(c("darkblue", "skyblue"), 0.5)) +
+   stat_compare_means(comparisons = list(c("Screening", "Day 5")),paired=TRUE, method="wilcox.test",vjust=0, tip.length = 0.05)+
+   scale_y_continuous(expand=expansion(mult = .2))
+ 
+#Cell counts between Responders (Sustained Clinical Response yes/no)
+ ggplot(soc_counts_percentage, aes(x = Sustained_Clinical_Response_by_D29, y = Percentages, fill = Sustained_Clinical_Response_by_D29)) +
+   geom_boxplot(outlier.shape = NA, alpha=0.6) +
+   # geom_line(aes(group = Unique_ID, colour="grey"), position = pd) +
+   geom_point(aes(group=Unique_ID), size=3, shape=21, position = pd) +
+   labs(x = "Timepoint", y = "Percentage of total cell count", fill = "Time point") +
+   theme_bw(base_size = 14) +
+   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+   facet_wrap(~ Cell_Type, scales = "free", ncol = 5) +
+   scale_fill_manual(values = alpha(c("darkblue", "skyblue"), 0.5)) +
+   stat_compare_means(comparisons = list(c("No", "Yes")),method="wilcox.test",vjust=0, tip.length = 0.05)+
+   scale_y_continuous(expand=expansion(mult = .2))
+ 
+
+```
+
+

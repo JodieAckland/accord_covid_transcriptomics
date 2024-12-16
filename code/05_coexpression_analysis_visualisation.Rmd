@@ -1,0 +1,2603 @@
+---
+  title: "05_Coexpression_analysis_visualisation"
+#output: html_notebook
+---
+Co-expression analysis was performed using pyWGCNA in previous Jupyter notebooks:
+04_coexpression_pywgcna.ipynb
+
+# About
+This code is for further analysis/intepretation and visualisation of gene co-expression modules
+
+1.  Analysis
+(a) Module enrichment analysis using GO terms
+(b) Module enrichment analysis using BTM gene sets
+(c) Cluster enrichment analysis using both GO and BTM
+(d) Gene signature 
+
+
+
+2. Visualisation
+(a) Heatmap and barplot visualisation of each module correlation and p value with traits of interest
+(b) Facet barplot of significant modules 
+(c) Consensus bubble plot of treatment arms vs standard of care
+(d) Hub gene extraction for visualisation in cytoscape
+
+
+## Load libraries
+
+```{r message=FALSE}
+# Packages to load
+packages <- c(
+  "clusterProfiler", "cowplot","fgsea", "ggnewscale","ggplot2", "ggsankey", "grid", "gridExtra", "patchwork","rstatix", "tidyverse")
+
+
+############################################################################################################
+load_libraries <- function(packages) {
+  for (package in packages) {
+    if (!require(package, character.only = TRUE)) {
+      install.packages(package)
+      library(package, character.only = TRUE)
+    }
+  }
+}
+
+# Load all packages
+load_libraries(packages)
+
+```
+
+## Load data
+
+Accompanying manually curated files for visualistion:
+"top_pathways" = top 5 enriched GO:BP terms following REVIGO redundancy filtering for barplot plotting for figure 
+"module_enrichment_summary" =  manually curated file summarising the main enrichment for each module into key biological process terms
+also contains meta data for each of the treatment arms (bem_meta, toz_meta, zil_meta, soc_meta) to use for plotting
+
+```{r}
+
+load("./data_files/wgcna_visualisation_data.Rdata") 
+
+```
+
+## 1. Enrichment analysis of WGCNA modules
+
+Enrichment was performed using clusterprofiler, to align with enrichment performed on DEGs.
+Enrichment was also perfomed using BTM gene sets to ascertain cellular specific enrichment
+of modules.
+
+### 1a - Gene Ontology enrichment of WGCNA modules
+
+This will perform enrichment on each module in each treatment arm for the BP, MF and CC Gene Ontology categories, creating a new output folder for each module and storing the output in that folder.
+
+The input folder for each treatment arm, "module_information_**treatment**.csv", where **treatment** is replaced by the respective treatment, was created and saved during the 04_coexpression_pywgcna analysis
+
+```{r}
+
+# Define the function to perform the GO enrichment analysis
+perform_go_enrichment_analysis <- function(cohort, input_file, output_dir) {
+  # Load the data
+  module_list <- read.csv(input_file)
+  
+  # Rename columns
+  module_list <- module_list[1:2]
+  colnames(module_list) <- c("ENSG", "colors")
+  
+  # Pivot the data
+  module_list$index <- ave(seq_along(module_list$colors), module_list$colors, FUN = seq_along)
+  df_pivoted <- spread(module_list, key = colors, value = ENSG)
+  df_pivoted$index <- NULL
+  module_list_pivoted_clean <- df_pivoted
+  module_list_pivoted_clean[is.na(module_list_pivoted_clean)] <- ""
+  write.csv(module_list_pivoted_clean, paste0(output_dir, "/Module_information_", cohort, "_wide.csv"))
+  
+  # Set background genes
+  background_genes <- module_list$ENSG
+  
+  # GO enrichment analysis
+  go_categories <- c("MF", "BP", "CC")
+  plot_width <- 8
+  plot_height <- 10
+  base_dir <- paste(output_dir, cohort, "Module_GO", sep="/")
+  if (!file.exists(base_dir)) {
+    dir.create(base_dir, recursive = TRUE)
+  }
+  
+  for (column in names(module_list_pivoted_clean)) {
+    column_dir <- file.path(base_dir, column)
+    if (!file.exists(column_dir)) {
+      dir.create(column_dir, recursive = TRUE)
+    }
+    for (go in go_categories) {
+      ego <- tryCatch({
+        enrichGO(gene = module_list_pivoted_clean[, column],
+                 universe = background_genes,
+                 OrgDb = "org.Hs.eg.db",
+                 keyType = "ENSEMBL",
+                 ont = go,
+                 pAdjustMethod = "BH",
+                 qvalueCutoff = 0.05,
+                 readable = TRUE)
+      }, error = function(e) NULL)
+      
+      if (!is.null(ego) && nrow(ego) > 0) {
+        bar_plot <- barplot(ego, showCategory = 20) +
+          ggtitle(paste("Top 20 enriched", go, "pathways for", column)) +
+          theme_minimal()
+        ggsave(filename = file.path(column_dir, paste(column, go, "barplot.pdf", sep = "_")), plot = bar_plot, width = plot_width, height = plot_height)
+        
+        dot_plot <- dotplot(ego, showCategory = 20) +
+          ggtitle(paste("Top 20 enriched", go, "pathways for", column)) +
+          theme_minimal()
+        ggsave(filename = file.path(column_dir, paste(column, go, "dotplot.pdf", sep = "_")), plot = dot_plot, width = plot_width, height = plot_height)
+        
+        enriched_terms <- ego@result[, c("ID", "Description", "GeneRatio", "BgRatio", "pvalue", "qvalue", "geneID", "Count")]
+        enriched_filename <- file.path(column_dir, paste(column, "_", go, "_enriched_pathways.csv", sep = ""))
+        write.csv(enriched_terms, enriched_filename, row.names = FALSE)
+      } else {
+        message(paste("No enriched terms found for", go, "in", column, ". Skipping..."))
+      }
+    }
+  }
+}
+
+# Treatment cohorts and their input files
+cohorts <- list(
+  Bemcentinib = "module_information_bemcentinib.csv",
+  Tozorakimab = "module_information_tozorakimab.csv",
+  Zilucoplan = "module_information_zilucoplan.csv",
+  SoC = "module_information_soc.csv"
+)
+
+# Run the analysis for each cohort
+for (cohort in names(cohorts)) {
+  input_file <- cohorts[[cohort]]
+  output_dir <- paste("./", sep="")
+  perform_go_enrichment_analysis(cohort, input_file, output_dir)
+}
+
+
+
+```
+
+### 1b - BTM enrichment of WGCNA modules
+
+As above for GO, the analysis was performed using the BTM gene sets, again creating indiviudal folders for each module to store the output. 
+
+```{r}
+
+# Function to perform BTM enrichment analysis
+perform_BTM_enrichment_analysis <- function(cohort, input_file, output_dir) {
+  # Load module list
+  module_list <- read.csv(input_file)
+  
+  # Rename columns
+  module_list <- module_list[, c("gene_name", "dynamicColors")]
+  colnames(module_list) <- c("gene", "colors")
+  
+  # Pivot data
+  module_list$index <- ave(seq_along(module_list$colors), module_list$colors, FUN = seq_along)
+  df_pivoted <- spread(module_list, key = colors, value = gene)
+  df_pivoted$index <- NULL
+  module_list_pivoted_clean <- df_pivoted
+  module_list_pivoted_clean[is.na(module_list_pivoted_clean)] <- ""
+  
+  # Set universe/background genes as the input genes for this WGCNA
+  background_genes <- module_list$gene
+  
+  # Load BTM pathways
+  pathways <- read.gmt("BTM_for_GSEA_20131008.gmt")
+  
+  
+  # Create output dir
+  plot_height <- 10
+  plot_width <-10
+  base_dir <- file.path(output_dir, paste(cohort, "/BTM_enrichment", sep="/"))
+  if (!file.exists(base_dir)) {
+    dir.create(base_dir, recursive = TRUE)
+  }
+  
+  # Loop through columns
+  for (column in names(module_list_pivoted_clean)) {
+    column_genes <- module_list_pivoted_clean[, column]
+    # Remove empty strings from column_genes vector
+    column_genes <- column_genes[nzchar(column_genes)]
+    
+    # Perform enrichment for that module
+    enricher_BTM <- enricher(gene = column_genes, universe = background_genes, TERM2GENE = pathways, pAdjustMethod = "BH")
+    # Check if enrichment results exist
+    if (!is.null(enricher_BTM)) {
+      # Check if enrichment results have rows
+      if (nrow(enricher_BTM@result) > 0) {
+        column_dir <- file.path(base_dir, column)
+        if (!file.exists(column_dir)) {
+          dir.create(column_dir, recursive = TRUE)
+        }
+        if (!is.null(enricher_BTM$geneID) && nrow(enricher_BTM) > 0) {
+          # Barplot
+          bar_plot <- barplot(enricher_BTM, showCategory = 20) +
+            ggtitle(paste("Top 20 enriched pathways for", column)) +
+            theme_minimal()
+          ggsave(filename = file.path(column_dir, paste(column, "barplot.pdf", sep = "_")), plot = bar_plot, width = plot_width, height = plot_height)
+          
+          # Dotplot
+          dot_plot <- dotplot(enricher_BTM, showCategory = 20) +
+            ggtitle(paste("Top 20 enriched pathways for", column)) +
+            theme_minimal()
+          ggsave(filename = file.path(column_dir, paste(column, "dotplot.pdf", sep = "_")), plot = dot_plot, width = plot_width, height = plot_height)
+        } else {
+          cat(paste("No enriched terms found for", column, "in the BTM gene set. Skipping..."))
+        }
+        # Save enriched terms to a CSV file
+        enriched_terms <- enricher_BTM@result[, c("ID", "Description", "GeneRatio", "BgRatio", "pvalue", "qvalue", "geneID", "Count")]
+        enriched_filename <- file.path(column_dir, paste(column, "_enriched_pathways.csv", sep = ""))
+        write.csv(enriched_terms, enriched_filename, row.names = FALSE)
+      } else {
+        message(paste("No enriched terms found for", column, ". Skipping..."))
+      }
+    } else {
+      cat("No enriched terms found for", column, "in the BTM gene set. Skipping...\n")
+    }
+  }
+}
+
+# Define the treatment cohorts and their input files
+cohorts <- list(
+  Bemcentinib = "module_information_bemcentinib.csv",
+  Tozorakimab = "module_information_tozorakimab.csv",
+  Zilucoplan = "module_information_zilucoplan.csv",
+  SoC = "module_information_soc.csv"
+)
+
+
+# Run the analysis for each cohort
+for (cohort in names(cohorts)) {
+  input_file <- cohorts[[cohort]]
+  output_dir <- paste("./", sep="")
+  perform_BTM_enrichment_analysis(cohort, input_file, output_dir)
+}
+
+
+```
+
+Now summarise the cell-specific significantly enriched BTM for each treatment arm module
+to see if certain modules have cell specific enrichment associated with them
+
+```{r message=FALSE}
+
+# Define cell-related keywords and their final versions
+cell_keywords <- c("monocyte", "monocytes", "Monocyte", "B cells", "B cell", "T cells", "T cell", 
+                   "thymocyte", "thymocytes", "Thymocyte", "Thymocytes", "NK cells", "NK cell",
+                   "Neutrophils", "Neutrophil", "neutrophils", "neutrophil", "plasma cell", 
+                   "lymphocyte", "DC", "DCs", "dendritic cell", "dendritic cells", "myeloid", 
+                   "platelet", "Plasma cell", "Plasma cells", "plasma cells")
+
+# Finalized cell type names
+final_cell_types <- c("Monocytes", "Monocytes", "Monocytes", "B cells", "B cells", "T cells", "T cells",
+                      "T cells", "T cells", "T cells", "T cells", "NK cells", "NK cells",
+                      "Neutrophils", "Neutrophils", "Neutrophils", "Neutrophils", "B cells",
+                      "B cells", "Dendritic cells", "Dendritic cells", "Dendritic cells", "Dendritic cells", 
+                      "Myeloid", "Platelets", "B cells", "B cells", "B cells")
+
+# Create a named vector for replacing keywords
+replacement_map <- setNames(final_cell_types, cell_keywords)
+
+# Function to process a single CSV file and count cell-related keywords
+process_csv <- function(filepath, replacement_map) {
+  # Read the CSV file
+  df <- read_csv(filepath)
+  
+  # Filter significant rows (qvalue < 0.05)
+  significant_df <- df %>% filter(qvalue < 0.05)
+  
+  # Initialize a count vector
+  count_vector <- setNames(rep(0, length(unique(final_cell_types))), unique(final_cell_types))
+  
+  if (nrow(significant_df) > 0) {
+    # Replace keywords in the Description column
+    for (keyword in names(replacement_map)) {
+      replacement <- replacement_map[[keyword]]
+      significant_df$Description <- gsub(keyword, replacement, significant_df$Description, ignore.case = TRUE)
+    }
+    
+    # Count occurrences of each final cell type in the Description column
+    for (cell_type in unique(final_cell_types)) {
+      count_vector[cell_type] <- sum(grepl(cell_type, significant_df$Description, ignore.case = TRUE))
+    }
+  }
+  
+  # Create a summarized data frame
+  summarized_df <- data.frame(
+    CellType = names(count_vector),
+    TotalCount = count_vector,
+    stringsAsFactors = FALSE
+  ) %>%
+    pivot_wider(names_from = CellType, values_from = TotalCount, values_fill = list(TotalCount = 0))
+  
+  return(summarized_df)
+}
+
+# List of treatment arms and their respective directories
+treatment_arms <- list(
+  Bemcentinib = "./Bemcentinib/BTM_enrichment/",
+  Tozorakimab = "./Tozorakimab/BTM_enrichment/",
+  SoC = "./SoC/BTM_enrichment/",
+  Zilucoplan = "./Zilucoplan/BTM_enrichment/"
+)
+
+# Initialize an empty list to store the summary data frames
+summary_list <- list()
+
+# Loop through each treatment arm and its directory
+for (treatment_arm in names(treatment_arms)) {
+  dir_path <- treatment_arms[[treatment_arm]]
+  
+  # Get a list of module dirs
+  module_dirs <- list.dirs(dir_path, full.names = TRUE, recursive = FALSE)
+  
+  # Loop through each module directory
+  for (module_dir in module_dirs) {
+    module_name <- basename(module_dir)
+    csv_file <- file.path(module_dir, paste0(module_name, "_enriched_pathways.csv"))
+    
+    # Check if the csv file exists
+    if (file.exists(csv_file)) {
+      # Process the csv file and get the summarised counts
+      summarized_counts <- process_csv(csv_file, replacement_map)
+      
+      # Add the treatment arm and module information
+      summarized_counts <- summarized_counts %>%
+        mutate(TreatmentArm = treatment_arm, Module = module_name) %>%
+        select(TreatmentArm, Module, everything())
+      
+      # Add the summarized counts to the list
+      summary_list[[length(summary_list) + 1]] <- summarized_counts
+    } else {
+      # If the file does not exist, create a dummy row with zero counts
+      dummy_counts <- data.frame(
+        TreatmentArm = treatment_arm,
+        Module = module_name,
+        matrix(0, ncol = length(unique(final_cell_types)), nrow = 1)
+      )
+      colnames(dummy_counts)[3:ncol(dummy_counts)] <- unique(final_cell_types)
+      
+      # Add the dummy counts to the list
+      summary_list[[length(summary_list) + 1]] <- dummy_counts
+    }
+  }
+}
+
+# Combine all summary data frames into one
+summary_df <- bind_rows(summary_list)
+
+# Print the final summary data frame
+print(summary_df)
+
+```
+
+### 1c - Enrichment of WGCNA consensus clusters
+
+```{r}
+#read in module_information csvs which were saved for each drug treatment arm 
+#add drug name to start of module column before combining
+Bem_modules<-read.csv("module_information_bemcentinib.csv", row.names=1, header=TRUE)
+colnames(Bem_modules)[2] <- paste("Bemcentinib", colnames(Bem_modules)[2], sep = "_") #add treatment infront of colour to pinpoint which module colour treatment when merging
+Toz_modules<-read.csv("module_information_tozorakimab.csv", row.names=1, header=TRUE)
+colnames(Toz_modules)[2] <- paste("Tozorakimab", colnames(Toz_modules)[2], sep = "_")
+Zil_modules<-read.csv("module_information_zilucoplan.csv",row.names=1, header=TRUE)
+colnames(Zil_modules)[2] <- paste("Zilucoplan", colnames(Zil_modules)[2], sep = "_")
+
+# Create a subsetted new data frame with just the desired column and the row names
+Bem_modules_sub <- Bem_modules[, c("Bemcentinib_moduleColors"), drop = FALSE]
+Toz_modules_sub <- Toz_modules[, c("Tozorakimab_moduleColors"), drop = FALSE]
+Zil_modules_sub <- Zil_modules[, c("Zilucoplan_moduleColors"), drop = FALSE]
+
+#create background list of all 3 
+# Convert row names to a column and rename the column to 'Genes'
+Bem_modules_genes <- Bem_modules_sub %>% rownames_to_column(var = "Genes")
+Toz_modules_genes <- Toz_modules_sub %>% rownames_to_column(var = "Genes")
+Zil_modules_genes <- Zil_modules_sub %>% rownames_to_column(var = "Genes")
+# Merge the data frames
+background_genes <- full_join(Bem_modules_genes, Toz_modules_genes, by = "Genes") %>%
+  full_join(Zil_modules_genes, by = "Genes")
+# Select only the 'Genes' column
+background_genes <- dplyr::select(background_genes, Genes)
+# Drop duplicates 
+background_genes <- distinct(background_genes)
+# Count the number of unique values in the 'Genes' column
+num_unique_genes <- background_genes %>%
+  summarize(unique_genes = n_distinct(Genes))
+# Print the result
+print(num_unique_genes)
+#unique_genes
+#1        30141
+#this list is for background for clusterprofiler analysis
+background <- background_genes$Genes
+
+####### Cluster 1 #########
+#create gene lists, by defining which modules i want included
+#cluster 1 = Bem (gainsboro), Toz (salmon), Zil (brown)
+# Specify the values to match
+cluster1_Bem_desired_colors <- c("gainsboro")
+cluster1_Toz_desired_colors <- c("salmon")
+cluster1_Zil_desired_colors <- c("brown")
+# Create a logical vector indicating whether each row matches the desired colors
+cluster1_Bem_matching_rows <- Bem_modules_sub$Bemcentinib_moduleColors %in% cluster1_Bem_desired_colors
+cluster1_Toz_matching_rows <- Toz_modules_sub$Toz_moduleColors %in% cluster1_Toz_desired_colors
+cluster1_Zil_matching_rows <- Zil_modules_sub$Zilucoplan_moduleColors %in% cluster1_Zil_desired_colors
+
+# Extract the row names where the condition is TRUE
+cluster1_Bem_matching_row_names <- rownames(Bem_modules_sub[cluster1_Bem_matching_rows, , drop = FALSE])
+cluster1_Toz_matching_row_names <- rownames(Toz_modules_sub[cluster1_Toz_matching_rows, , drop = FALSE])
+cluster1_Zil_matching_row_names <- rownames(Zil_modules_sub[cluster1_Zil_matching_rows, , drop = FALSE])
+# Create a new data frame with a single column of matching row names
+immune_cluster_1_ids <- data.frame(immune_cluster_1_ids = c(cluster1_Bem_matching_row_names,cluster1_Toz_matching_row_names, cluster1_Zil_matching_row_names))
+dim(immune_cluster_1_ids)
+
+
+#cluster 2
+#create gene lists, by defining which modules i want included
+#cluster 1 = Bem (darksalmon), Toz (chocolate), Zil (black)
+# Specify the values to match
+cluster2_Bem_desired_colors <- c("linen", "tomato")
+cluster2_Toz_desired_colors <- c("tan")
+cluster2_Zil_desired_colors <- c("coral")
+# Create a logical vector indicating whether each row matches the desired colors
+cluster2_Bem_matching_rows <- Bem_modules_sub$Bemcentinib_moduleColors %in% cluster2_Bem_desired_colors
+cluster2_Toz_matching_rows <- Toz_modules_sub$Toz_moduleColors %in% cluster2_Toz_desired_colors
+cluster2_Zil_matching_rows <- Zil_modules_sub$Zilucoplan_moduleColors %in% cluster2_Zil_desired_colors
+
+# Extract the row names where the condition is TRUE
+cluster2_Bem_matching_row_names <- rownames(Bem_modules_sub[cluster2_Bem_matching_rows, , drop = FALSE])
+cluster2_Toz_matching_row_names <- rownames(Toz_modules_sub[cluster2_Toz_matching_rows, , drop = FALSE])
+cluster2_Zil_matching_row_names <- rownames(Zil_modules_sub[cluster2_Zil_matching_rows, , drop = FALSE])
+# Create a new data frame with a single column of matching row names
+immune_cluster_2_ids <- data.frame(immune_cluster_2_ids = c(cluster2_Bem_matching_row_names,cluster2_Toz_matching_row_names, cluster2_Zil_matching_row_names))
+dim(immune_cluster_2_ids)
+
+#cluster 3
+#create gene lists, by defining which modules i want included
+#cluster 1 = Bem (darksalmon), Toz (chocolate), Zil (black)
+# Specify the values to match
+cluster3_Bem_desired_colors <- c("rosybrown")
+cluster3_Toz_desired_colors <- c("orangered", "burlywood")
+cluster3_Zil_desired_colors <- c("indianred")
+# Create a logical vector indicating whether each row matches the desired colors
+cluster3_Bem_matching_rows <- Bem_modules_sub$Bemcentinib_moduleColors %in% cluster3_Bem_desired_colors
+cluster3_Toz_matching_rows <- Toz_modules_sub$Toz_moduleColors %in% cluster3_Toz_desired_colors
+cluster3_Zil_matching_rows <- Zil_modules_sub$Zilucoplan_moduleColors %in% cluster3_Zil_desired_colors
+
+# Extract the row names where the condition is TRUE
+cluster3_Bem_matching_row_names <- rownames(Bem_modules_sub[cluster3_Bem_matching_rows, , drop = FALSE])
+cluster3_Toz_matching_row_names <- rownames(Toz_modules_sub[cluster3_Toz_matching_rows, , drop = FALSE])
+cluster3_Zil_matching_row_names <- rownames(Zil_modules_sub[cluster3_Zil_matching_rows, , drop = FALSE])
+# Create a new data frame with a single column of matching row names
+immune_cluster_3_ids <- data.frame(immune_cluster_3_ids = c(cluster3_Bem_matching_row_names,cluster3_Toz_matching_row_names, cluster3_Zil_matching_row_names))
+dim(immune_cluster_3_ids)
+
+#cluster 4
+#create gene lists, by defining which modules i want included
+#cluster 1 = Bem (darksalmon), Toz (chocolate), Zil (black)
+# Specify the values to match
+cluster4_Bem_desired_colors <- c("snow", "white")
+cluster4_Toz_desired_colors <- c("sandybrown")
+cluster4_Zil_desired_colors <- c("gainsboro")
+# Create a logical vector indicating whether each row matches the desired colors
+cluster4_Bem_matching_rows <- Bem_modules_sub$Bemcentinib_moduleColors %in% cluster4_Bem_desired_colors
+cluster4_Toz_matching_rows <- Toz_modules_sub$Toz_moduleColors %in% cluster4_Toz_desired_colors
+cluster4_Zil_matching_rows <- Zil_modules_sub$Zilucoplan_moduleColors %in% cluster4_Zil_desired_colors
+
+# Extract the row names where the condition is TRUE
+cluster4_Bem_matching_row_names <- rownames(Bem_modules_sub[cluster4_Bem_matching_rows, , drop = FALSE])
+cluster4_Toz_matching_row_names <- rownames(Toz_modules_sub[cluster4_Toz_matching_rows, , drop = FALSE])
+cluster4_Zil_matching_row_names <- rownames(Zil_modules_sub[cluster4_Zil_matching_rows, , drop = FALSE])
+# Create a new data frame with a single column of matching row names
+immune_cluster_4_ids <- data.frame(immune_cluster_4_ids = c(cluster4_Bem_matching_row_names,cluster4_Toz_matching_row_names, cluster4_Zil_matching_row_names))
+dim(immune_cluster_4_ids)
+
+#cluster 5
+#create gene lists, by defining which modules i want included
+#cluster 1 = Bem (darksalmon), Toz (chocolate), Zil (black)
+# Specify the values to match
+cluster5_Bem_desired_colors <- c("darksalmon")
+cluster5_Toz_desired_colors <- c("chocolate")
+cluster5_Zil_desired_colors <- c("black")
+# Create a logical vector indicating whether each row matches the desired colors
+cluster5_Bem_matching_rows <- Bem_modules_sub$Bemcentinib_moduleColors %in% cluster5_Bem_desired_colors
+cluster5_Toz_matching_rows <- Toz_modules_sub$Toz_moduleColors %in% cluster5_Toz_desired_colors
+cluster5_Zil_matching_rows <- Zil_modules_sub$Zilucoplan_moduleColors %in% cluster5_Zil_desired_colors
+
+# Extract the row names where the condition is TRUE
+cluster5_Bem_matching_row_names <- rownames(Bem_modules_sub[cluster5_Bem_matching_rows, , drop = FALSE])
+cluster5_Toz_matching_row_names <- rownames(Toz_modules_sub[cluster5_Toz_matching_rows, , drop = FALSE])
+cluster5_Zil_matching_row_names <- rownames(Zil_modules_sub[cluster5_Zil_matching_rows, , drop = FALSE])
+# Create a new data frame with a single column of matching row names
+immune_cluster_5_ids <- data.frame(immune_cluster_5_ids = c(cluster5_Bem_matching_row_names,cluster5_Toz_matching_row_names, cluster5_Zil_matching_row_names))
+dim(immune_cluster_5_ids)
+
+#cluster 6
+#create gene lists, by defining which modules i want included
+#cluster 1 = Bem (darksalmon), Toz (chocolate), Zil (black)
+# Specify the values to match
+cluster6_Bem_desired_colors <- c("darkgrey", "silver", "lightcoral")
+cluster6_Toz_desired_colors <- c("moccasin", "gainsboro")
+cluster6_Zil_desired_colors <- c("darkgrey", "lightgrey", "chocolate")
+# Create a logical vector indicating whether each row matches the desired colors
+cluster6_Bem_matching_rows <- Bem_modules_sub$Bemcentinib_moduleColors %in% cluster6_Bem_desired_colors
+cluster6_Toz_matching_rows <- Toz_modules_sub$Toz_moduleColors %in% cluster6_Toz_desired_colors
+cluster6_Zil_matching_rows <- Zil_modules_sub$Zilucoplan_moduleColors %in% cluster6_Zil_desired_colors
+
+# Extract the row names where the condition is TRUE
+cluster6_Bem_matching_row_names <- rownames(Bem_modules_sub[cluster6_Bem_matching_rows, , drop = FALSE])
+cluster6_Toz_matching_row_names <- rownames(Toz_modules_sub[cluster6_Toz_matching_rows, , drop = FALSE])
+cluster6_Zil_matching_row_names <- rownames(Zil_modules_sub[cluster6_Zil_matching_rows, , drop = FALSE])
+# Create a new data frame with a single column of matching row names
+immune_cluster_6_ids <- data.frame(immune_cluster_6_ids = c(cluster6_Bem_matching_row_names,cluster6_Toz_matching_row_names, cluster6_Zil_matching_row_names))
+dim(immune_cluster_6_ids)
+
+#Define set of genes
+cluster_1_set <- immune_cluster_1_ids$immune_cluster_1_ids
+cluster_2_set <- immune_cluster_2_ids$immune_cluster_2_ids
+cluster_3_set <- immune_cluster_3_ids$immune_cluster_3_ids
+cluster_4_set <- immune_cluster_4_ids$immune_cluster_4_ids
+cluster_5_set <- immune_cluster_5_ids$immune_cluster_5_ids
+cluster_6_set <- immune_cluster_6_ids$immune_cluster_6_ids
+
+# Update gene_sets with the new gene sets
+gene_sets <- list(
+  Cluster_1 = cluster_1_set,
+  Cluster_2 = cluster_2_set,
+  Cluster_3 = cluster_3_set,
+  Cluster_4 = cluster_4_set,
+Cluster_5 = cluster_5_set,
+Cluster_6 = cluster_6_set
+)
+
+# Set up plot parameters
+plot_width <- 8
+plot_height <- 10
+#define root.name
+root.name <- "WGCNA_consensus_module_enrichment_"
+# List of GO categories
+go_categories <- c("MF", "BP", "CC")
+# Create the directory if it doesn't exist
+dir.create("./Consensus/Clusters/GO/", recursive = TRUE)
+
+for (gene_set_name in names(gene_sets)) {
+  gene_set <- gene_sets[[gene_set_name]]
+  
+  for (go in go_categories) {
+    # Perform GO enrichment analysis for the current gene set
+    ego <- tryCatch({
+      enrichGO(gene = gene_set,
+               universe = background,
+               OrgDb = "org.Hs.eg.db",
+               keyType = "ENSEMBL",
+               ont = go,
+               pAdjustMethod = "BH",
+               qvalueCutoff = 0.05,
+               readable = TRUE)
+    }, error = function(e) NULL)
+    
+    if (!is.null(ego$geneID) && nrow(ego) > 0) {
+      # Barplot for top 20 enriched pathways for the current gene set
+      bar_plot <- barplot(ego, showCategory = 20) +
+        ggtitle(paste("Top 20 enriched", go, "pathways for", gene_set_name, "_set")) +
+        theme_minimal()
+      
+      # Save plot as PDF
+      ggsave(filename = paste("./Consensus/Clusters/GO/",root.name, gene_set_name, "_", go, "_barplot.pdf", sep = ""), plot = bar_plot, width = plot_width, height = plot_height)
+    } else {
+      cat(paste("No enriched terms found for", go, "in the", gene_set_name, "_set. Skipping..."))
+    }
+    
+    # Save enrichment results as CSV
+    if (!is.null(ego$geneID) && nrow(ego) > 0) {
+      write.csv(ego, file = paste("./Consensus/Clusters/GO/",root.name, gene_set_name, "_", go, "_enrichment_results.csv", sep = ""), row.names = FALSE)
+    } else {
+      cat(paste("No enriched terms found for", go, "in the", gene_set_name, "_set. Skipping..."))
+    }
+  }
+}
+
+```
+
+#### (i) REVIGO
+Some of these Biological Process outputs are large. 
+The online tool REVIGO was used to reduce the resulting list, where the top 5 terms from each were selected for visualisation. 
+This output is stored in the wgcna_visualisation_data.Rdata file.
+This REVIGO output was then used to plot the top 5 terms for each cluster as barplot. 
+
+```{r, fig.height=15, fig.width=7.5}
+
+                      
+# Define colors for each cluster
+cluster_colors <- c("Cluster1" = "skyblue", 
+                    "Cluster2" = "red", 
+                    "Cluster3" = "forestgreen", 
+                    "Cluster4" = "darkorange", 
+                    "Cluster5" = "gold", 
+                    "Cluster6" = "purple")
+
+ggplot(top_pathways, aes(x=Count, y=reorder(Name, -qvalue), fill=cluster)) +
+  geom_bar(stat='identity', color="black", alpha=0.3) +
+  theme_bw(base_size = 14) +
+  scale_fill_manual(values = cluster_colors) +  
+  theme(axis.title.y = element_blank()) + 
+  facet_wrap(~cluster, scales = "free", ncol = 1) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        plot.margin = margin(10, 10, 10, 10),
+        legend.position = "none") +
+  ggh4x::facetted_pos_scales(x = list(     
+    Cluster1 = scale_x_continuous(expand = c(0, 0), limits = c(0,300)),
+    Cluster2 = scale_x_continuous(expand = c(0, 0), limits = c(0,50)),
+    Cluster3 = scale_x_continuous(expand = c(0, 0), limits = c(0,100)),
+    Cluster4 = scale_x_continuous(expand = c(0, 0), limits = c(0,200)),
+    Cluster5 = scale_x_continuous(expand = c(0, 0), limits = c(0,100)),
+    Cluster6 = scale_x_continuous(expand = c(0, 0), limits = c(0,400))
+  ))
+
+
+```
+
+### 1d - Gene signatures
+Visualisation of gene individual gene signatures according to eigengene expression of each module
+Module eigenegene expression for each sample was extracted from the pyWGCNA object and saved as csv for processing in R. 
+
+#### (i) Determine percentage of patients with specific gene signature
+```{r}
+# General function to process a dataset
+process_dataset <- function(eigengene_file, meta_file, treatment_name, patient_count) {
+  # Read the data
+  eigengene <- read.csv(eigengene_file, header = TRUE)
+  meta <- meta_file
+  
+  # Filter metadata
+  id <- eigengene$sample_name
+  meta_sub <- meta %>%
+    select(Sample_id, Unique_ID, Day, ICU_HDU_stay_during_hospital_admission, 
+           Death_or_Respiratory_Failure_at_D29, Sustained_Clinical_Response_by_D29) %>%
+    filter(Sample_id %in% id) %>%
+    mutate(outcome = case_when(
+      ICU_HDU_stay_during_hospital_admission == "Yes" | 
+        Death_or_Respiratory_Failure_at_D29 == "Yes" | 
+        Sustained_Clinical_Response_by_D29 == "No" ~ "poor", 
+      ICU_HDU_stay_during_hospital_admission == "No" & 
+        Death_or_Respiratory_Failure_at_D29 == "No" & 
+        Sustained_Clinical_Response_by_D29 == "Yes" ~ "good",
+      TRUE ~ "unknown"
+    ))
+  
+  # Convert eigengene expression to high/low
+  eigengene_exp <- eigengene
+  eigengene_exp[, -1] <- apply(eigengene_exp[, -1], 2, function(x) {
+    ifelse(x > 0, "high", "low")
+  })
+  
+  # Merge metadata with eigengene expression
+  eigengene_meta <- merge(meta_sub, eigengene_exp, by.x = "Sample_id", by.y = "sample_name")
+  
+  # Pivot data for expression count
+  eigengene_exp_count <- eigengene_meta %>%
+    pivot_longer(cols = ends_with("eigengeneExp"), 
+                 names_to = "module", 
+                 values_to = "expression") %>%
+    group_by(Day, outcome, module, expression) %>%
+    summarize(count = n(), .groups = 'drop') %>%
+    complete(Day, outcome, module, expression, fill = list(count = 0))
+  
+  # Calculate proportion and percentage
+  eigengene_exp_count_prop <- eigengene_exp_count %>%
+    mutate(
+      proportion = count / patient_count,
+      percentage = (count / patient_count) * 100
+    )
+  
+  # Reshape to wide format for plotting
+  eigengene_exp_count_prop_wide <- eigengene_exp_count_prop %>%
+    unite("Day_outcome_expression", Day, outcome, expression, sep = "_") %>%
+    pivot_wider(names_from = Day_outcome_expression, 
+                values_from = c(count, proportion, percentage),
+                values_fn = list(count = sum, proportion = sum, percentage = sum)) %>%
+    mutate(module = str_replace(module, "eigengeneExp", treatment_name))
+  
+  # Matched analysis for gene signature shifts
+  shift_df <- eigengene_meta %>%
+    filter(Day %in% c("D1", "D5")) %>%
+    select(Unique_ID, Day, outcome, ends_with("eigengeneExp")) %>%
+    pivot_longer(cols = ends_with("eigengeneExp"), names_to = "module", values_to = "expression") %>%
+    pivot_wider(names_from = Day, values_from = expression) %>%
+    mutate(shift = case_when(
+      D1 == "low" & D5 == "high" ~ "Low to High",
+      D1 == "high" & D5 == "low" ~ "High to Low",
+      D1 == "low" & D5 == "low" ~ "Always Low",
+      D1 == "high" & D5 == "high" ~ "Always High",
+      TRUE ~ NA_character_
+    ))
+  
+  return(list(
+    count_prop_wide = eigengene_exp_count_prop_wide,
+    shift = shift_df
+  ))
+}
+
+# Apply the function to each dataset
+# the eigengene file is the one extracted from the pyWGCNA object in 04_coexpression_pywgcna
+datasets <- list(
+  bemcentinib = list(
+    eigengene_file = "bemcentinib_all_modules_eigengene_data.csv",
+    meta_file = bem_meta,
+    treatment_name = "bemcentinib",
+    patient_count = 11
+  ),
+  tozorakimab = list(
+    eigengene_file = "tozorakimab_all_modules_eigengene_data.csv",
+    meta_file = toz_meta,
+    treatment_name = "tozorakimab",
+    patient_count = 29
+  ),
+  zilucoplan = list(
+    eigengene_file = "zilucoplan_all_modules_eigengene_data.csv",
+    meta_file = zil_meta,
+    treatment_name = "zilucoplan",
+    patient_count = 11
+  )
+)
+
+# Initialize an empty list to store count_prop_wide for combining later
+count_prop_wide_list <- list()
+
+# Loop through each dataset to process and save results
+for (treatment_name in names(datasets)) {
+  # Process the dataset
+  result <- process_dataset(
+    eigengene_file = datasets[[treatment_name]]$eigengene_file,
+    meta_file = datasets[[treatment_name]]$meta_file,
+    treatment_name = datasets[[treatment_name]]$treatment_name,
+    patient_count = datasets[[treatment_name]]$patient_count
+  )
+  
+  # output individual dfs with treatment-specific prefixes in the global environment
+  count_prop_wide_name <- paste0(treatment_name, "_count_prop_wide")
+  shift_df_name <- paste0(treatment_name, "_shift_df")
+  
+  assign(count_prop_wide_name, result$count_prop_wide, envir = .GlobalEnv)
+  assign(shift_df_name, result$shift, envir = .GlobalEnv)
+  
+  # Add to the list for combining
+  count_prop_wide_list[[treatment_name]] <- result$count_prop_wide
+}
+
+# Combine wide count data for all treatments
+combined_count_wide <- bind_rows(count_prop_wide_list)
+
+# Save combined data
+#write.csv(combined_count_wide, "combined_eigenegene_counts_wide.csv")
+
+
+#now need to mege modules with similar ontology enrichment for plotting and merge with module enrichment summary file
+# Select only the "percentage_" columns
+percentage_df <- combined_count_wide %>%
+  select(module, starts_with("percentage_"))
+
+# List of row combinations to merge - ones that are closely linked in the cluster network (e.g. in same cluster)
+merge_combinations <- list(
+  tomato_linen_bemcentinib = c("tomato_bemcentinib", "linen_bemcentinib"),
+  gainsboro_moccasin_tozorakimab = c("gainsboro_tozorakimab", "moccasin_tozorakimab"),
+  papyawhip_linen_tozorakimab = c("papyawhip_tozorakimab", "linen_tozorakimab")
+)
+
+# Iterate through the combinations and calculate averages
+merged_rows <- lapply(names(merge_combinations), function(new_row_name) {
+  # Filter and compute the average for the specified rows
+  percentage_df %>%
+    filter(module %in% merge_combinations[[new_row_name]]) %>%
+    summarise(across(starts_with("percentage_"), mean, na.rm = TRUE)) %>%
+    mutate(module = new_row_name)
+}) %>%
+  bind_rows() # Combine all the merged rows into a single DataFrame
+
+# Step 4: Remove the original rows and add the new merged rows
+percentage_df_final <- percentage_df %>%
+  filter(!module %in% unlist(merge_combinations)) %>%
+  bind_rows(merged_rows)
+
+# View the resulting DataFrame
+head(percentage_df_final)
+
+#now using the manually curated module enricvhment summary file to merge with gene sig file 
+# this is saved  wgcna_visualisation_data.Rdata as "module_enrichment_summary_terms"
+# merge
+percentage_mod_enrichment_summary<-merge(module_enrichment_summary_terms, percentage_df_final, by.x="module_treatment", by.y="module")
+percentage_mod_enrichment_summary
+#save for later use if necessary
+#write.csv(percentage_mod_enrichment_summary, "percentage_mod_enrichment_summary.csv")
+
+
+```
+
+#### (ii) Day 5 gene signature bubble plot
+
+Now to plot the proportion of patients with a high or low eigengene expression for a given gene signature (as defined by enrichment analysis for a module) at day 5 following treatment to see how the modulation of gene signatures impacts on outcomes. 
+
+```{r fig.height=5, fig.width=14}
+# reshape the module enrichment summary data to long for plotting as a bubble/dot plot
+bubble_data <- percentage_mod_enrichment_summary %>%
+  pivot_longer(
+    cols = starts_with("percentage_"), 
+    names_to = c("Timepoint", "Outcome"), 
+    names_pattern = "percentage_(D[1|5])_(.*)", 
+    values_to = "Score"
+  ) %>%
+  select(treatment, module, module_treatment, term, Outcome, Timepoint, Score)
+
+
+# onlyplotting day5, so keep day 5 rows only
+D5_expression_data <- filter(bubble_data, Timepoint %in% c("D5"))
+#D5_expression_data <- filter(filtered_data, Timepoint %in% c("D5"))
+D5_expression_data <- D5_expression_data %>%
+  separate(Outcome, into = c("response", "expression"), sep = "_", remove = FALSE)
+
+# Create a custom labeller fr response facet
+response_labeller <- c("good" = "Sustained Clinical\nImprovement",
+                       "poor" = "Poor Clinical\nOutcome")
+D5_expression_data <- D5_expression_data %>%
+  mutate(
+    term = ifelse(term == "Immunometabolism", "Immuno- metabolism", term),
+    treatment = recode(
+      treatment,
+      "zilucoplan" = "Zilucoplan",
+      "tozorakimab" = "Tozorakimab",
+      "bemcentinib" = "Bemcentinib"
+    )
+  )
+
+
+colours <- c("Bemcentinib" = "forestgreen", # Forest Green for Bemcentinib
+             "Tozorakimab" = "gold",       # Gold for Tozorakimab
+             "Zilucoplan" = "coral")
+
+D5_expression_data$expression<-factor(D5_expression_data$expression, levels = c("low", "high"))
+D5_expression_data$treatment <-factor(D5_expression_data$treatment, levels = c("Zilucoplan", "Tozorakimab","Bemcentinib" ))
+
+plot_D5_expression <- ggplot(D5_expression_data, aes(x = expression, y = treatment, group = Outcome)) +
+  geom_jitter(aes(size = Score, fill = treatment),
+              alpha = 0.75,
+              color = "black",                # Set the border color to black
+              shape = 21,                     # Use shape = 21 for points with fill and border
+              position = position_jitterdodge(0.01)) +
+  scale_fill_manual(values=colours)+
+  # scale_fill_distiller(palette = "BrBG")+
+  #  scale_fill_gradient2(low = "purple", mid = "white", high = "orange", midpoint = 0.5) +  # Adjust for fill scale
+  scale_size_continuous(
+    range = c(1, 15),   # Point size range for visualization
+    limits = c(0, 100) # Define the scale limits
+    # oob = scales::squish # Handle values outside the range by squishing them into the limits
+  ) +
+  scale_y_discrete(position = "right")+ #move y labels to the right hand side
+  labs(x = "Gene Set Expression", y = "Treatment", fill = "Treatment", size = "Percentage") +
+  theme_bw(base_size=12) +
+  theme(
+    #axis.text.x = element_blank(), # Remove labels for this plot
+    axis.ticks.x = element_blank(),
+    axis.title.y = element_blank(),  # Remove y-axis label for term
+    #  axis.title.x = element_blank(),  # Remove x-axis label for Timepoint
+    legend.position = "bottom")+     # Hide legend for this plot+
+  facet_grid(response ~ term, 
+             scales = "free_x", 
+             switch="y",
+             labeller = labeller(response = response_labeller, term = label_wrap_gen(10))) +
+  ggtitle("Gene Signature Expression at Day 5")+
+  guides(
+    fill = guide_legend(override.aes = list(size = 15)),  # Increase dot size for color legend
+  )
+plot_D5_expression
+
+```
+
+#### (iii) Day 1 to Day 5 sankey plot
+
+To visualise individual flow of patient shift in expression between day 1 and day 5, plot as a sankey plot
+
+Here we are interested in those 4 key immune signatures shown to be important for outcomes throughout the stud:
+1. B cell signalling
+2. Antiviral immunity
+3. Immune cell lactivation and inflammation
+4. Platelet and coagulation
+
+first need to process dfs ready for plotting, generate aesthetics etc
+
+```{r}
+# Function to process shift dataframes
+process_shift_data <- function(shift_df, treatment_name) {
+  shift_df %>%
+    mutate(
+      module = gsub("_eigengeneExp", "", module),  # Remove 'eigengeneExp' from module names
+      treatment = treatment_name,  # Add treatment column
+      module_treatment = paste(module, treatment_name, sep = "_")  # Create module_treatment column, important as some module colours may overlap between treatments, but they are different!
+    )
+}
+
+# Process each treatment's shift dataframe
+bem_shift <- process_shift_data(bemcentinib_shift_df, "bemcentinib")
+toz_shift <- process_shift_data(tozorakimab_shift_df, "tozorakimab")
+zil_shift <- process_shift_data(zilucoplan_shift_df, "zilucoplan")
+
+# Combine all shift data into a single dataframe
+all_shift <- bind_rows(bem_shift, toz_shift, zil_shift)
+
+# Define modules of interest with corresponding terms
+modules_of_interest <- c(
+  "tomato_bemcentinib" = "Platelet and coagulation",
+  "white_bemcentinib" = "Immune cell activation and inflammation",
+  "rosybrown_bemcentinib" = "Antiviral immunity",
+  "maroon_bemcentinib" = "B-cell activation and signalling",
+  "tan_tozorakimab" = "Platelet and coagulation",
+  "burlywood_tozorakimab" = "Antiviral immunity",
+  "sandybrown_tozorakimab" = "Immune cell activation and inflammation",
+  "lightsalmon_zilucoplan" = "B-cell activation and signalling"
+)
+
+# Filter and map the 'term' column based on 'module_treatment'
+all_shift_filtered <- all_shift %>%
+  filter(module_treatment %in% names(modules_of_interest)) %>%
+  mutate(term = modules_of_interest[module_treatment])
+
+# Check the filtered data
+head(all_shift_filtered)
+
+# Recode and reorder factors in df_endotypes
+df_endotypes <- all_shift_filtered %>%
+  mutate(
+    treatment = recode(treatment, 
+                       "bemcentinib" = "Bemcentinib", 
+                       "tozorakimab" = "Tozorakimab", 
+                       "zilucoplan" = "Zilucoplan"),
+    outcome = recode(outcome, 
+                     "poor" = "Poor Clinical\nOutcome", 
+                     "good" = "Sustained Clinical\nImprovement"),
+    term = recode(term,
+                  "Immune cell activation and inflammation" = "Immune cell activation\nand inflammation",
+                  "B-cell activation and signalling" = "B-cell activation\nand signalling",
+                  "Platelet and coagulation" = "Platelet and\ncoagulation")
+  )
+
+# Expression and treatment colors
+expression_colours <- c(
+  "Standard\nof Care" = "skyblue",
+  "Bemcentinib" = "forestgreen",
+  "Tozorakimab" = "gold",
+  "Zilucoplan" = "coral",
+  "low" = "navy",
+  "high" = "darkred",
+  "always high" = "darkred",
+  "high to low" = "aquamarine2",
+  "low to high" = "orange",
+  "always low" = "navy",
+  "Poor Clinical\nOutcome" = "#CC3300",
+  "Sustained Clinical\nImprovement" = "#660066",
+  "Immune cell activation\nand inflammation" = "#CC3333",
+  "Antiviral immunity" = "#339966",
+  "B-cell activation\nand signalling" = "#A65628",
+  "Platelet and\ncoagulation" = "#F781BF"
+)
+
+```
+
+```{r, fig.height=12, fig.width=20}
+
+
+#Extract each term of interest into new df for plotting
+
+# 1. Bcell signalling
+bcell_endotypes_bem<- df_endotypes %>%
+  filter(term=="B-cell activation\nand signalling", treatment == "Bemcentinib")
+bcell_endotypes_zil<- df_endotypes %>%
+  filter(term=="B-cell activation\nand signalling", treatment == "Zilucoplan")
+
+#turn into df for sankey
+sankey_bcell_bem <- bcell_endotypes_bem %>%
+  make_long(D1,D5, outcome)%>%
+  mutate(
+    # Reorder levels within 'node' for 'd1', 'd5', 'outcome' to flip high and low
+    node = factor(node, levels = c("low", "high",  "Poor Clinical\nOutcome","Sustained Clinical\nImprovement")),
+    next_node = factor(next_node, levels = c("low", "high",  "Poor Clinical\nOutcome","Sustained Clinical\nImprovement")))
+
+#Create plot
+plot_sankey_bcell_bem <- ggplot(sankey_bcell_bem, aes(x = x, 
+                                                      next_x = next_x, 
+                                                      node = node, 
+                                                      next_node = next_node,
+                                                      fill = factor(node),
+                                                      label = node)) +  
+  geom_sankey(flow.alpha = 0.5, node.colour = 1, smooth = 6, width = 0.2) +
+  geom_sankey_label(
+    size = 3.5, color = 1,  fill = "white")+
+  scale_fill_manual(values = expression_colours) +
+  # scale_x_discrete(
+  #   limits = c("d1", "d5", "outcome"),  # Current labels
+  #   labels = c("Day 1 Expression", "Day 5 Expression", "Clinical Outcome")) + #remove x labels for plotting one above each other in final plot
+  theme_sankey(base_size = 16) +
+  theme(
+    plot.margin = margin(0, 0, 0, 0),
+    legend.position = "none",
+    plot.title =  element_blank(),
+    axis.title.x = element_blank(),  # Remove x-axis title
+    axis.text.x = element_blank())+     # Remove x-axis text
+
+  # Add green box for bem
+  annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "forestgreen", col = "black", lwd = 2)),  # Larger green box
+    xmin = 0.7, xmax = 0.9, ymin = -Inf, ymax = Inf) +  # Adjust the size and position
+  # Add a white box around the text "Bemcentinib"
+  annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "white", col = "black", lwd = 2)),  # White box around the text
+    xmin = 0.75, xmax = 0.85, ymin = -4, ymax = 4 ) +  # Adjust position to be just around the text
+  # Add the text "Bemcentinib"
+  annotation_custom(
+    grob = textGrob("Bemcentinib", 
+                    rot = 90,  
+                    gp = gpar(fontsize = 16, col = "black")),  # Text inside the white box
+    xmin = 0.8, xmax = 0.8, ymin = -Inf, ymax = Inf)  # Position the text
+
+#Now for zilucoplan bcell
+#turn into df for sankey
+sankey_bcell_zil <- bcell_endotypes_zil %>%
+  make_long(D1,D5, outcome)%>%
+  
+  mutate(
+    # Reorder levels within 'node' for 'd1', 'd5', 'outcome' to flip high and low
+    node = factor(node, levels = c("low", "high",  "Poor Clinical\nOutcome","Sustained Clinical\nImprovement")),
+    next_node = factor(next_node, levels = c("low", "high",  "Poor Clinical\nOutcome", "Sustained Clinical\nImprovement")))
+
+plot_sankey_bcell_zil <- ggplot(sankey_bcell_zil, aes(x = x, 
+                                                      next_x = next_x, 
+                                                      node = node, 
+                                                      next_node = next_node,
+                                                      fill = factor(node),
+                                                      label = node)) +  
+  geom_sankey(flow.alpha = 0.5, node.colour = 1, smooth = 6, width = 0.2) +
+  geom_sankey_label(
+    size = 3.5, color = 1,  fill = "white")+
+  scale_fill_manual(values = expression_colours) +
+  # scale_x_discrete(
+  #   limits = c("d1", "d5", "outcome"),  # Current labels
+  #   labels = c("Day 1 Expression", "Day 5 Expression", "Clinical Outcome")) + #remove x labels for plotting one above each other in final plot
+  theme_sankey(base_size = 16) +
+  theme(
+    plot.margin = margin(0, 0, 0, 0),
+    legend.position = "none",
+    plot.title =  element_blank(),
+    axis.title.x = element_blank(),  # Remove x-axis title
+    axis.text.x = element_blank())+     # Remove x-axis text
+  # Add red/coral box for zilucoplan
+    annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "coral", col = "black", lwd = 2)),  # Box for Zilucoplan
+    xmin = 0.7, xmax = 0.9, ymin = -Inf, ymax = Inf) +
+  # Add a white box around the text "Bemcentinib"
+  annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "white", col = "black", lwd = 2)),  # White box around the text
+    xmin = 0.75, xmax = 0.85, ymin = -3, ymax = 3 ) +    # Adjust position to be just around the text
+ # add zilucoplan as text
+  annotation_custom(
+    grob = textGrob("Zilucoplan", 
+                    rot = 90,  
+                    gp = gpar(fontsize = 16)),
+    xmin = 0.8, xmax = 0.8, ymin = -Inf, ymax = Inf)
+
+#combined both plots into a single b cell plot
+bcell<-grid.arrange(plot_sankey_bcell_bem, 
+                    plot_sankey_bcell_zil,
+                    ncol=1,
+                    top= textGrob("B-cell activation and signalling",gp=gpar(fontsize=20)),
+                    heights = c(4, 4))
+#2. antiviral immunity 
+#first bemcentinib
+antiviral_endotypes_bem<- df_endotypes %>%
+  filter(term=="Antiviral immunity", treatment == "Bemcentinib")
+antiviral_endotypes_toz<- df_endotypes %>%
+  filter(term=="Antiviral immunity", treatment == "Tozorakimab")
+#turn into df for sankey
+sankey_antiviral_bem <- antiviral_endotypes_bem %>%
+  make_long(D1,D5, outcome)%>%
+    mutate(
+    # Reorder levels within 'node' for 'd1', 'd5', 'outcome' to flip high and low
+    node = factor(node, levels = c("low", "high",  "Poor Clinical\nOutcome","Sustained Clinical\nImprovement")),
+    next_node = factor(next_node, levels = c("low", "high",  "Poor Clinical\nOutcome","Sustained Clinical\nImprovement")))
+                                           
+plot_sankey_antiviral_bem <- ggplot(sankey_antiviral_bem, aes(x = x, 
+                                                              next_x = next_x, 
+                                                              node = node, 
+                                                              next_node = next_node,
+                                                              fill = factor(node),
+                                                              label = node)) +  
+  geom_sankey(flow.alpha = 0.5, node.colour = 1, smooth = 6, width = 0.2) +
+  geom_sankey_label(
+    size = 3.5, color = 1,  fill = "white")+
+  scale_fill_manual(values = expression_colours) +
+  theme_sankey(base_size = 16) +
+  # scale_x_discrete(
+  #   limits = c("d1", "d5", "outcome"),  # Current labels
+  #   labels = c("Day 1 Expression", "Day 5 Expression", "Clinical Outcome")) + #remove x labels for plotting one above each other in final plot
+  theme(
+    plot.margin = margin(0, 0, 0, 0),
+    legend.position = "none",
+    plot.title = element_blank(),
+    axis.title.x = element_blank(),  # Remove x-axis title
+    axis.text.x = element_blank())+     # Remove x-axis text
+ # Add green box for bemcentinib
+  annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "forestgreen", col = "black", lwd = 2)),  # Box around text
+    xmin = 0.7, xmax = 0.9, ymin = -Inf, ymax = Inf ) +
+   # Add a white box around the text "Bemcentinib"
+  annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "white", col = "black", lwd = 2)),  # White box around the text
+    xmin = 0.75, xmax = 0.85, ymin = -4, ymax = 4  ) +# Adjust position to be just around the text
+#Add text for bemcentinib
+  annotation_custom(
+    grob = textGrob("Bemcentinib", 
+                    rot = 90,  
+                    gp = gpar(fontsize = 16)),
+    xmin = 0.8, xmax = 0.8, ymin = -Inf, ymax = Inf)
+# Now for tozorakimab antiviral
+#turn into df for sankey
+sankey_antiviral_toz <- antiviral_endotypes_toz %>%
+  make_long(D1,D5, outcome)%>%
+  
+  mutate(
+    # Reorder levels within 'node' for 'd1', 'd5', 'outcome' to flip high and low
+    node = factor(node, levels = c("low", "high",  "Poor Clinical\nOutcome","Sustained Clinical\nImprovement")),
+    next_node = factor(next_node, levels = c("low", "high",  "Poor Clinical\nOutcome","Sustained Clinical\nImprovement")))
+
+plot_sankey_antiviral_toz <- ggplot(sankey_antiviral_toz, aes(x = x, 
+                                                              next_x = next_x, 
+                                                              node = node, 
+                                                              next_node = next_node,
+                                                              fill = factor(node),
+                                                              label = node)) +  
+  geom_sankey(flow.alpha = 0.5, node.colour = 1, smooth = 6, width = 0.2) +
+  geom_sankey_label(
+    size = 3.5, color = 1,  fill = "white")+
+  scale_fill_manual(values = expression_colours) +
+  # scale_x_discrete(
+  #   limits = c("d1", "d5", "outcome"),  # Current labels
+  #   labels = c("Day 1 Expression", "Day 5 Expression", "Clinical Outcome")) + #remove x labels for plotting one above each other in final plot
+  theme_sankey(base_size = 16) +
+   theme(
+    plot.margin = margin(0, 0, 0, 0),
+    legend.position = "none",
+    plot.title = element_blank(),
+    axis.title.x = element_blank(),  # Remove x-axis title
+    axis.text.x = element_blank())+    # Remove x-axis text
+ # Add yellow/gold box for Tozorakimab
+  annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "gold", col = "black", lwd = 2)),  # Box around text
+    xmin = 0.7, xmax = 0.9, ymin = -Inf, ymax = Inf ) +
+  # Add a white box around the text "Tozorakimab"
+  annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "white", col = "black", lwd = 2)),  # White box around the text
+    xmin = 0.75, xmax = 0.85, ymin = -9, ymax = 9) +  # Adjust position to be just around the text
+  # Add text for Tozorakimab
+  annotation_custom(
+    grob = textGrob("Tozorakimab", 
+                    rot = 90,  
+                    gp = gpar(fontsize = 16)),
+    xmin = 0.8, xmax = 0.8, ymin = -Inf, ymax = Inf)
+ #combined the two antiviral sankey plots
+antiviral<-grid.arrange(plot_sankey_antiviral_bem, 
+                        plot_sankey_antiviral_toz,
+                        ncol=1,
+                        top= textGrob("Antiviral immunity",gp=gpar(fontsize=20)),
+                        heights = c(4, 4))  # Adjust heights as necessary
+
+#3. immune cell activation and inflammation
+inflamm_endotypes_bem<- df_endotypes %>%
+  filter(term=="Immune cell activation\nand inflammation", treatment == "Bemcentinib")
+inflamm_endotypes_toz<- df_endotypes %>%
+  filter(term=="Immune cell activation\nand inflammation", treatment == "Tozorakimab")
+#First bemcentinib
+#turn into df for sankey
+sankey_inflamm_bem <- inflamm_endotypes_bem %>%
+  make_long(D1,D5, outcome)%>%
+    mutate(
+    # Reorder levels within 'node' for 'd1', 'd5', 'outcome' to flip high and low
+    node = factor(node, levels = c("low", "high",  "Poor Clinical\nOutcome","Sustained Clinical\nImprovement")),
+    next_node = factor(next_node, levels = c("low", "high",  "Poor Clinical\nOutcome",
+                                             "Sustained Clinical\nImprovement")))
+
+plot_sankey_inflamm_bem <- ggplot(sankey_inflamm_bem, aes(x = x, 
+                                                          next_x = next_x, 
+                                                          node = node, 
+                                                          next_node = next_node,
+                                                          fill = factor(node),
+                                                          label = node)) +  
+  geom_sankey(flow.alpha = 0.5, node.colour = 1, smooth = 6, width = 0.2) +
+  geom_sankey_label(
+    size = 3.5, color = 1,  fill = "white")+
+  scale_fill_manual(values = expression_colours) +
+  # scale_x_discrete(
+  #   limits = c("d1", "d5", "outcome"),  # Current labels
+  #   labels = c("Day 1 Expression", "Day 5 Expression", "Clinical Outcome")) + #remove x labels for plotting one above each other in final plot
+  theme_sankey(base_size = 16) +
+  theme(
+    plot.margin = margin(0, 0, 0, 0),
+    legend.position = "none",
+    plot.title = element_blank(),
+    axis.title.x = element_blank(),  # Remove x-axis title
+    axis.text.x = element_blank())+     # Remove x-axis text
+ # Add green box for Bem
+  annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "forestgreen", col = "black", lwd = 2)),  # Box around text
+    xmin = 0.7, xmax = 0.9, ymin = -Inf, ymax = Inf) +
+   # Add a white box around the text "Bemcentinib"
+  annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "white", col = "black", lwd = 2)),  # White box around the text
+    xmin = 0.75, xmax = 0.85, ymin = -3.5, ymax = 3.5) +  # Adjust position to be just around the text
+ # Add text for Bemcentinib
+  annotation_custom(
+    grob = textGrob("Bemcentinib", 
+                    rot = 90,  
+                    gp = gpar(fontsize = 16)),
+    xmin = 0.8, xmax = 0.8, ymin = -Inf, ymax = Inf)
+# Now for Tozorakimab
+#turn into df for sankey
+sankey_inflamm_toz <- inflamm_endotypes_toz %>%
+  make_long(D1,D5, outcome)%>%
+    mutate(
+    # Reorder levels within 'node' for 'd1', 'd5', 'outcome' to flip high and low
+    node = factor(node, levels = c("low", "high",  "Poor Clinical\nOutcome",
+                                   "Sustained Clinical\nImprovement")),
+    
+    next_node = factor(next_node, levels = c("low", "high",  "Poor Clinical\nOutcome",
+                                             "Sustained Clinical\nImprovement"))
+  )
+
+plot_sankey_inflamm_toz <- ggplot(sankey_inflamm_toz, aes(x = x, 
+                                                          next_x = next_x, 
+                                                          node = node, 
+                                                          next_node = next_node,
+                                                          fill = factor(node),
+                                                          label = node)) +  
+  geom_sankey(flow.alpha = 0.5, node.colour = 1, smooth = 6, width = 0.2) +
+  geom_sankey_label(
+    size = 3.5, color = 1,  fill = "white")+
+  scale_fill_manual(values = expression_colours) +
+  scale_x_discrete(
+    limits = c("D1", "D5", "outcome"),  # Current labels
+    labels = c("Day 1 Expression", "Day 5 Expression", "Clinical Outcome")  # New labels
+  ) +
+  theme_sankey(base_size = 16) +
+  theme(
+    plot.margin = margin(0, 0, 0, 0),
+    legend.position = "none",
+    plot.title = element_blank(),
+    axis.title.x = element_blank())+  # Remove x-axis title
+    # axis.text.x = element_blank()     # Remove x-axis text
+  # Add yellow/gold box for Toz
+  annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "gold", col = "black", lwd = 2)),  # Box around text
+    xmin = 0.7, xmax = 0.9, ymin = -Inf, ymax = Inf) +
+  # Add a white box around the text "Bemcentinib"
+  annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "white", col = "black", lwd = 2)),  # White box around the text
+    xmin = 0.75, xmax = 0.85, ymin = -9, ymax = 9) +  # Adjust position to be just around the text
+    # Add texr for Tozorakimab
+  annotation_custom(
+    grob = textGrob("Tozorakimab", 
+                    rot = 90,  
+                    gp = gpar(fontsize = 16)),
+    xmin = 0.8, xmax = 0.8, ymin = -Inf, ymax = Inf)
+  
+# combine both plots for inflamm
+inflamm<-grid.arrange(plot_sankey_inflamm_bem, 
+                      plot_sankey_inflamm_toz,
+                      ncol=1,
+                      top= textGrob("Immune cell activation and inflammation",gp=gpar(fontsize=20)),
+                      heights = c(4, 4))  # Adjust heights as necessary
+
+# 4.Platelets and coagulation terms
+platelet_endotypes_bem<- df_endotypes %>%
+  filter(term=="Platelet and\ncoagulation", treatment == "Bemcentinib")
+platelet_endotypes_toz<- df_endotypes %>%
+  filter(term=="Platelet and\ncoagulation", treatment == "Tozorakimab")
+#First for Bem
+#turn into df for sankey
+sankey_platelet_bem <- platelet_endotypes_bem %>%
+  make_long(D1,D5, outcome)%>%
+    mutate(
+    # Reorder levels within 'node' for 'd1', 'd5', 'outcome' to flip high and low
+    node = factor(node, levels = c("low", "high",  "Poor Clinical\nOutcome","Sustained Clinical\nImprovement")),
+    next_node = factor(next_node, levels = c("low", "high",  "Poor Clinical\nOutcome","Sustained Clinical\nImprovement")))
+  
+plot_sankey_platelet_bem <- ggplot(sankey_platelet_bem, aes(x = x, 
+                                                            next_x = next_x, 
+                                                            node = node, 
+                                                            next_node = next_node,
+                                                            fill = factor(node),
+                                                            label = node)) +  
+  geom_sankey(flow.alpha = 0.5, node.colour = 1, smooth = 6, width = 0.2) +
+  geom_sankey_label(
+    size = 3.5, color = 1,  fill = "white")+
+  scale_fill_manual(values = expression_colours) +
+  # scale_x_discrete(
+  #   limits = c("d1", "d5", "outcome"),  # Current labels
+  #   labels = c("Day 1 Expression", "Day 5 Expression", "Clinical Outcome")  # New labels
+  # ) +
+  theme_sankey(base_size = 16) +
+  theme(
+    plot.margin = margin(0, 0, 0, 0),
+    legend.position = "none",
+    plot.title = element_blank(),
+    axis.title.x = element_blank(),  # Remove x-axis title
+    axis.text.x = element_blank() )+     # Remove x-axis text
+ # Add green box for Bem
+  annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "forestgreen", col = "black", lwd = 2)),  # Box around text
+    xmin = 0.7, xmax = 0.9, ymin = -Inf, ymax = Inf) +
+   # Add a white box around the text "Bemcentinib"
+  annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "white", col = "black", lwd = 2)),  # White box around the text
+    xmin = 0.75, xmax = 0.85, ymin = -3.5, ymax = 3.5) +  # Adjust position to be just around the text
+ # Add text for Bemcentinib
+    annotation_custom(
+    grob = textGrob("Bemcentinib", 
+                    rot = 90,  
+                    gp = gpar(fontsize = 16)),
+    xmin = 0.8, xmax = 0.8, ymin = -Inf, ymax = Inf)
+# Now for Tozorakimab
+#turn into df for sankey
+sankey_platelet_toz <- platelet_endotypes_toz %>%
+  make_long(D1,D5, outcome)%>%
+    mutate(
+    # Reorder levels within 'node' for 'd1', 'd5', 'outcome' to flip high and low
+    node = factor(node, levels = c("low", "high",  "Poor Clinical\nOutcome","Sustained Clinical\nImprovement")),
+    next_node = factor(next_node, levels = c("low", "high",  "Poor Clinical\nOutcome","Sustained Clinical\nImprovement")))
+ 
+plot_sankey_platelet_toz <- ggplot(sankey_platelet_toz, aes(x = x, 
+                                                            next_x = next_x, 
+                                                            node = node, 
+                                                            next_node = next_node,
+                                                            fill = factor(node),
+                                                            label = node)) +  
+  geom_sankey(flow.alpha = 0.5, node.colour = 1, smooth = 6, width = 0.2) +
+  geom_sankey_label(
+    size = 3.5, color = 1,  fill = "white")+
+  scale_fill_manual(values = expression_colours) +
+  scale_x_discrete(
+    limits = c("D1", "D5", "outcome"),  # Current labels
+    labels = c("Day 1 Expression", "Day 5 Expression", "Clinical Outcome")  # New labels
+  ) +
+  theme_sankey(base_size = 16) +
+  theme(
+    plot.margin = margin(0, 0, 0, 0),
+    legend.position = "none",
+    plot.title = element_blank(),
+    axis.title.x = element_blank()  # Remove x-axis title
+    # axis.text.x = element_blank()     # Remove x-axis text
+  )+
+  #add yellow/gold box for Toz
+  annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "gold", col = "black", lwd = 2)),  # Box around text
+    xmin = 0.7, xmax = 0.9, ymin = -Inf, ymax = Inf) +
+   # Add a white box around the text "Bemcentinib"
+  annotation_custom(
+    grob = rectGrob(gp = gpar(fill = "white", col = "black", lwd = 2)),  # White box around the text
+    xmin = 0.75, xmax = 0.85, ymin = -9, ymax = 9) +# Adjust position to be just around the text
+  # Add text for Tozorakimab
+  annotation_custom(
+    grob = textGrob("Tozorakimab", 
+                    rot = 90,  
+                    gp = gpar(fontsize = 16)),
+    xmin = 0.8, xmax = 0.8, ymin = -Inf, ymax = Inf)
+# Combine both sankey plots
+platelet<-grid.arrange(plot_sankey_platelet_bem, 
+                       plot_sankey_platelet_toz,
+                       ncol=1,
+                       top= textGrob("Platelet and coagulation",gp=gpar(fontsize=20)),
+                       heights = c(4, 4))  # Adjust heights as necessary
+
+# Combine the four plots into a 2x2 grid
+combined_plots <- grid.arrange(
+  bcell, 
+  antiviral,
+  inflamm, 
+  platelet,
+  ncol = 2,  # 2 columns
+  nrow = 2,  # 2 rows
+  #top = textGrob("Endotype Analysis", gp = gpar(fontsize = 20))  # Optional title for the combined plot
+  padding = unit(50, "cm")  # Reduce the space between plots
+)
+
+
+
+```
+
+#### (iv) Gene signature shift for poor outcomes
+Now we are just selecting those with poor outcome to see their shift in expression categorised for the 4 key immune signatures
+
+```{r, fig.height=8, fig.width=6}
+# now plot the poor outcome individuals to show where the treatment failure may be
+# unique Patient_group labels for each treatment group
+unique_ids <- df_endotypes %>%
+  filter(outcome == "Poor Clinical\nOutcome") %>%  # Filter for poor clinical outcomes
+  select(Unique_ID, treatment) %>%  # Keep only relevant columns
+  distinct() %>%  # Ensure unique combinations of Unique_ID and treatment
+  group_by(treatment) %>%  # Group by treatment
+  mutate(Patient_group = paste(treatment, row_number(), sep = " #")) %>%  # Assign sequential IDs
+  ungroup()
+# Merge the Patient_group back into the original dataframe
+df_modified <- df_endotypes %>%
+  left_join(unique_ids, by = c("Unique_ID", "treatment")) %>%  # Join by Unique_ID and treatment
+  filter(outcome == "Poor Clinical\nOutcome")  # Keep only poor clinical outcomes
+#Reverse the order of Patient_group for plotting
+df_modified$Patient_group <- factor(df_modified$Patient_group, 
+                                    levels = rev(unique(df_modified$Patient_group)))
+# Create the heatmap plot
+ggplot(df_modified, aes(x = term, y = Patient_group, fill = shift)) +
+  geom_tile(color = "white", linewidth = 0.5) +  # Create tiles with a border for clarity
+  facet_grid(treatment~., scales = "free_y", space="free") +    # Facet by treatment with labels on the right
+  scale_fill_manual(values = c("Low to High" = "coral", 
+                               "High to Low" = "skyblue", 
+                               "Always Low" = "navy", 
+                               "Always High" = "darkred")) +
+  labs(x = "", 
+       y = "Patient", 
+       fill = "Expression Shift") +
+  scale_x_discrete(expand = c(0,0))+
+  
+  scale_y_discrete(expand = c(0,0))+
+  theme_bw(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels for readability
+        panel.grid = element_blank())+
+  ggtitle("Gene signature shifts in\nindividuals with poor outcomes")
+
+```
+
+# 2. Visualisation
+
+## 2a Heatmap and barplot visualisation of each module correlation and p value with traits of interest
+
+Creating module gene barplot showing the  number of genes assigned to a module and module-trait relationship heatmap for each of the treatment groups and then combine as one single plot
+
+For this, will need the correlation and pvalue matrix saved from 04_coexpression_pywgcna, as well as the "module_information"df for each treatment
+#### (i) Tozorakimab 
+```{r}
+# Create the heatmap for Tozorakimab group
+toz_heatmap_corr <- read.csv("tozorakimab_module_trait_cor_matrix.csv", row.names = 1, header = TRUE)
+toz_heatmap_pval <- read.csv("tozorakimab_module_trait_pvalue_matrix.csv", row.names = 1, header = TRUE)
+toz_combo <- merge(toz_heatmap_corr, toz_heatmap_pval, by = "row.names")
+# Save this over
+toz_module_order <- row.names(toz_heatmap_corr)
+# Change colnames
+colnames(toz_combo)[colnames(toz_combo) == "Row.names"] <- "Modules"
+# Module number for barplot
+toz_modules <- read.csv("Module_information_Tozorakimab.csv")
+# First, summarize the data by moduleColors
+toz_module_number <- toz_modules %>%
+  group_by(moduleColors) %>%
+  summarize(total_genes = n())
+
+# Create new column by adding 'ME' in front of 'toz_module_number'
+toz_module_number <- as.data.frame(toz_module_number)
+toz_cols = toz_module_number$moduleColors 
+toz_module_number$Modules <- paste0("ME", toz_module_number$moduleColors)
+
+# Set as row names for ordering the same way as the heatmap 
+row.names(toz_module_number) <- toz_module_number$Modules
+
+# Use this as the colours instead
+toz_heatmap_col_order <- gsub("ME", "", rownames(toz_heatmap_corr))
+
+# Reorder the levels in Modules
+toz_module_number$Modules <- factor(toz_module_number$Modules, levels = toz_module_order)
+toz_module_number$moduleColors <- factor(toz_module_number$moduleColors, levels = toz_heatmap_col_order)
+
+# Make longer
+toz_df_long_corr <- toz_combo %>%
+  pivot_longer(
+    cols = ends_with(".x"),
+    names_to = "Trait",
+    values_to = "Corr"
+  ) %>%
+  mutate(Trait = sub("\\.x$", "", Trait))
+
+toz_df_long_pval <- toz_combo %>%
+  pivot_longer(
+    cols = ends_with(".y"),
+    names_to = "Trait",
+    values_to = "pval"
+  ) %>%
+  mutate(Trait = sub("\\.y$", "", Trait))
+
+# Merge the two data frames based on "Modules" and "Trait"
+toz_result_df <- merge(toz_df_long_corr, toz_df_long_pval, by = c("Modules", "Trait"))
+# Reorder columns if needed
+toz_result_df <- toz_result_df[, c("Modules", "Trait", "Corr", "pval")]
+# Convert to numeric or character if it's not already
+toz_result_df$Modules <- as.character(toz_result_df$Modules)
+toz_result_df$pval <- as.numeric(toz_result_df$pval)
+toz_result_df$Corr <- as.numeric(toz_result_df$Corr)
+
+# Print the result
+print(toz_result_df)
+
+# Define your custom palette
+toz_my_palette <- rev(c("#67001F", "#B2182B", "#D6604D", "#F4A582", "#FDDBC7",
+                        "#F7F7F7", "#D1E5F0", "#92C5DE", "#4393C3", "#2166AC", "#053061"))
+
+# Reorder the levels in Trait
+toz_result_df$Trait <- factor(toz_result_df$Trait, levels = rev(c("Day", "Remdesivir", "ICU", "D29_Death_RespFailure", "D29_Sustained_Clinical_Response")))
+
+# Reorder the levels in Modules
+toz_result_df$Modules <- factor(toz_result_df$Modules, levels = toz_module_order)
+
+# Create a colour bar
+# Extract colors from Module labels
+toz_module_colors <- sub("^ME", "", toz_module_order)
+# Convert module_colors to factor with desired order
+toz_module_colors_factor <- factor(toz_module_colors, levels = unique(toz_module_colors))
+
+# Define the new labels for traits
+toz_new_trait_labels <- c(
+  "Day" = "Day",
+  "Remdesivir" = "Remdesivir",
+  "ICU" = "ICU",
+  "D29_Death_RespFailure" = "Death or Respiratory Failure",
+  "D29_Sustained_Clinical_Response" = "Sustained Clinical Response"
+)
+
+# Create barplot
+toz_barplot <- ggplot(data = toz_module_number, aes(x = Modules, y = total_genes, fill = toz_cols)) +
+  geom_col(aes(x = Modules, y = total_genes, fill = toz_cols), colour = "black", fill = toz_cols, position = "dodge") +
+  geom_text(aes(label = total_genes), position = position_dodge(width = 0.9), vjust = -0.25, size = 2) +
+  ylab("Number of genes") + 
+  ggtitle("Tozorakimab modules")+
+  theme_classic(base_size = 8) +
+  scale_y_continuous(limits = c(0, 12000)) +
+  scale_fill_manual(values = toz_cols) +
+  coord_cartesian(expand = FALSE) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_text(size = 6, vjust = -15),
+    plot.title = element_text(hjust = 0.5)) +
+  theme(legend.position = "none",
+        plot.margin = margin(0, 0, 0, 0),
+        axis.text.x = element_blank(), axis.ticks.x = element_blank(), axis.title.x = element_blank())
+
+# Create the heatmap
+toz_heatmap <- ggplot(toz_result_df) +
+  geom_tile(aes(x = Modules, y = Trait, fill = Corr, width = 1, height = 1)) +
+  scale_fill_gradientn(
+    colors = toz_my_palette,  # Use module colors
+    limits = c(-1, 1), 
+    breaks = c(-1, 0, 1),
+    labels = scales::number_format(accuracy = 0.1)) +
+  geom_text(aes(x = Modules, y = Trait, label = paste(round(Corr, 2))), 
+            vjust = 0, hjust = 0.5, size = 2, color = ifelse(toz_result_df$pval < 0.05, "black", "gray13"), 
+            fontface = ifelse(toz_result_df$pval < 0.05, "bold", "plain")) +
+  geom_text(aes(x = Modules, y = Trait, label = paste("(", format(round(pval, 3), nsmall = 3), ")", sep = "")), # format pvalue to 3 decimal places
+            vjust = 1, hjust = 0.5, size = 2, color = ifelse(toz_result_df$pval < 0.05, "black", "gray13"), 
+            fontface = ifelse(toz_result_df$pval < 0.05, "bold", "plain")) +
+  theme_minimal(base_size = 9.5) +
+  theme(
+    plot.margin = margin(0, 0, 0, 0),
+    panel.grid.major = element_blank(),  # Remove major gridlines
+    panel.grid.minor = element_blank(),  # Remove minor gridlines
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title.x = element_blank(),
+    legend.text = element_text(size = 6),  # Adjust legend text size
+    legend.title = element_text(size = 6),  # Adjust legend title size
+    plot.title = element_text(size = 10),  # Adjust title text size
+    legend.key.width = unit(0.2, "cm"),  # Adjust legend color scale width
+    legend.key.height = unit(0.5, "cm")) +  # Adjust legend color scale height
+  labs(
+    x = "",
+    y = "",
+    fill = "Correlation") +
+  scale_y_discrete(labels = toz_new_trait_labels) +
+  theme(legend.position = "right") +
+  coord_fixed(ratio = 1) +
+  new_scale_fill() +
+  geom_tile(data = tibble(Modules = paste0(toz_module_order),
+                          d = toz_module_colors_factor),
+            aes(x = Modules, y = 0.25, fill = d, height = 0.5)) +
+  scale_fill_identity()
+
+# Combine the two plots using patchwork
+toz_plot <- toz_barplot / plot_spacer() / toz_heatmap + plot_layout(heights = c(0.25, -0.3, 1))  
+# plot_annotation(  title = 'Tozorakimab Modules') & theme(plot.title = element_text(hjust = 0.5))
+
+# Display the combined plot
+print(toz_plot)
+
+```
+#### (ii) Bemcentinib
+```{r}
+# Read in data
+### for heatmap
+bem_heatmap_corr <- read.csv("bemcentinib_module_trait_cor_matrix.csv", row.names = 1, header = TRUE)
+bem_heatmap_pval <- read.csv("bemcentinib_module_trait_pvalue_matrix.csv", row.names = 1, header = TRUE)
+bem_combo <- merge(bem_heatmap_corr, bem_heatmap_pval, by = "row.names")
+
+# Rename specific modules as silver will not show as a colour, use slategrey (close enough) instead
+row.names(bem_heatmap_corr)[row.names(bem_heatmap_corr) == "MEsilver"] <- "MEslategrey"
+row.names(bem_heatmap_pval)[row.names(bem_heatmap_pval) == "MEsilver"] <- "MEslategrey"
+bem_combo <- merge(bem_heatmap_corr, bem_heatmap_pval, by = "row.names")
+
+# Module order
+bem_module_order <- row.names(bem_heatmap_corr)
+colnames(bem_combo)[colnames(bem_combo) == "Row.names"] <- "Modules"
+
+# Module number for barplot
+bem_modules <- read.csv("Module_information_Bemcentinib.csv")
+
+# First, summarise the data by moduleColors
+bem_module_number <- bem_modules %>%
+  group_by(moduleColors) %>%
+  summarize(total_genes = n())
+
+# Change silver to slategrey
+bem_module_number <- as.data.frame(bem_module_number)
+bem_module_number$moduleColors[bem_module_number$moduleColors == "silver"] <- "slategrey"
+cols = bem_module_number$moduleColors
+
+# Create new column by adding 'ME' in front of 'bem_module_number'
+bem_module_number$Modules <- paste0("ME", bem_module_number$moduleColors)
+
+# Set as row names for ordering the same way as the heatmap 
+row.names(bem_module_number) <- bem_module_number$Modules
+
+# Remove the string "ME" from the 'module_column'
+bem_heatmap_col_order <- gsub("ME", "", row.names(bem_heatmap_corr)) # Use this as the colors instead
+bem_heatmap_col_order[bem_heatmap_col_order == "silver"] <- "slategrey"
+
+# Save this order
+bem_module_order <- row.names(bem_heatmap_corr)
+
+# Reorder the levels in Modules
+bem_module_number$Modules <- factor(bem_module_number$Modules, levels = bem_module_order)
+bem_module_number$moduleColors <- factor(bem_module_number$moduleColors, levels = bem_heatmap_col_order)
+
+# Convert combo dataframe to long format for correlations and p-values
+bem_df_long_corr <- bem_combo %>%
+  pivot_longer(
+    cols = ends_with(".x"),
+    names_to = "Trait",
+    values_to = "Corr"
+  ) %>%
+  mutate(Trait = sub("\\.x$", "", Trait))
+
+bem_df_long_pval <- bem_combo %>%
+  pivot_longer(
+    cols = ends_with(".y"),
+    names_to = "Trait",
+    values_to = "pval"
+  ) %>%
+  mutate(Trait = sub("\\.y$", "", Trait))
+
+# Merge the two data frames based on "Modules" and "Trait"
+bem_result_df <- merge(bem_df_long_corr, bem_df_long_pval, by = c("Modules", "Trait"))
+
+# Reorder columns if needed
+bem_result_df <- bem_result_df[, c("Modules", "Trait", "Corr", "pval")]
+
+# Convert pval to numeric if it's not already
+bem_result_df$Modules <- as.character(bem_result_df$Modules)
+bem_result_df$pval <- as.numeric(bem_result_df$pval)
+bem_result_df$Corr <- as.numeric(bem_result_df$Corr)
+
+# Print the result
+print(bem_result_df)
+
+# Define your custom palette
+bem_my_palette <- rev(c("#67001F", "#B2182B", "#D6604D", "#F4A582", "#FDDBC7",
+                        "#F7F7F7", "#D1E5F0", "#92C5DE", "#4393C3", "#2166AC", "#053061"))
+
+# Reorder the levels in Trait
+bem_result_df$Trait <- factor(bem_result_df$Trait, levels = rev(c("Day", "Remdesivir", "ICU", "D29_Death_RespFailure", "D29_Sustained_Clinical_Response")))
+# Reorder the levels in Modules
+bem_result_df$Modules <- factor(bem_result_df$Modules, levels = bem_module_order)
+
+# Create a colour bar
+# Extract colors from Module labels
+bem_module_colors <- sub("^ME", "", bem_module_order)
+
+# Convert module_colors to factor with desired order
+bem_module_colors_factor <- factor(bem_module_colors, levels = unique(bem_module_colors))
+
+# Define the new labels for traits
+bem_new_trait_labels <- c(
+  "Day" = "Day",
+  "Remdesivir" = "Remdesivir",
+  "ICU" = "ICU",
+  "D29_Death_RespFailure" = "Death or Respiratory Failure",
+  "D29_Sustained_Clinical_Response" = "Sustained Clinical Response"
+)
+
+# Create barplot
+bem_barplot <- ggplot(data = bem_module_number, aes(x = Modules, y = total_genes, fill = cols)) +
+  geom_col(aes(x = Modules, y = total_genes, fill = cols), colour = "black", position = "dodge") +
+  geom_text(aes(label = total_genes), position = position_dodge(width = 0.9), vjust = -0.25, size = 2) +
+  ylab("Number of genes") + 
+  ggtitle("Bemcentinib modules")+
+  theme_classic(base_size = 8) +
+  scale_y_continuous(limits = c(0, 8000)) +
+  scale_fill_manual(values = cols) +
+  coord_cartesian(expand = FALSE) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_text(size = 6, vjust = -15),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  theme(legend.position = "none",
+        plot.margin = margin(0, 0, 0, 0),
+        axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+        axis.title.x = element_blank())
+
+# Create the heatmap
+bem_heatmap <- ggplot(bem_result_df) +
+  geom_tile(aes(x = Modules, y = Trait, fill = Corr, width = 1, height = 1)) +
+  scale_fill_gradientn(
+    colors = bem_my_palette,  # Use module colors
+    limits = c(-1, 1), 
+    breaks = c(-1, 0, 1),
+    labels = scales::number_format(accuracy = 0.1)) +
+  geom_text(aes(x = Modules, y = Trait, label = paste(round(Corr, 2))), 
+            vjust = 0, hjust = 0.5, size = 2, color = ifelse(bem_result_df$pval < 0.05, "black", "gray13"), 
+            fontface = ifelse(bem_result_df$pval < 0.05, "bold", "plain")) +
+  geom_text(aes(x = Modules, y = Trait, label = paste("(", format(round(pval, 3), nsmall = 3), ")", sep = "")), # format pvalue to 3 decimal places
+            vjust = 1, hjust = 0.5, size = 2, color = ifelse(bem_result_df$pval < 0.05, "black", "gray13"), 
+            fontface = ifelse(bem_result_df$pval < 0.05, "bold", "plain")) +
+  theme_minimal(base_size = 9.5) +
+  theme(
+    plot.margin = margin(0, 0, 0, 0),
+    panel.grid.major = element_blank(),  # Remove major gridlines
+    panel.grid.minor = element_blank(),  # Remove minor gridlines
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title.x = element_blank(),
+    legend.text = element_text(size = 6),  # Adjust legend text size
+    legend.title = element_text(size = 6),  # Adjust legend title size
+    plot.title = element_text(size = 10),  # Adjust title text size
+    legend.key.width = unit(0.2, "cm"),  # Adjust legend color scale width
+    legend.key.height = unit(0.5, "cm")) +  # Adjust legend color scale height
+  labs(
+    x = "",
+    y = "",
+    fill = "Correlation") +
+  scale_y_discrete(labels = bem_new_trait_labels) +
+  theme(legend.position = "right") +
+  coord_fixed(ratio = 1) +
+  new_scale_fill() +
+  geom_tile(data = tibble(Modules = paste0(bem_module_order),
+                          d = bem_module_colors_factor),
+            aes(x = Modules, y = 0.25, fill = d, height = 0.5)) +
+  scale_x_discrete(labels = c("MEslategrey" = "MEsilver", levels(bem_result_df$Modules))) +
+  scale_fill_identity()
+
+# Combine the two plots using patchwork
+bem_plot <- bem_barplot / plot_spacer() / bem_heatmap + plot_layout(heights = c(0.25, -0.29, 1))  
+#  plot_annotation(title = 'Bemcentinib Modules') & theme(plot.title = element_text(hjust = 0.5))
+
+# Display the combined plot
+print(bem_plot)
+
+```
+
+#### (iii) Zilucoplan
+```{r}
+# Read in data
+### for heatmap
+zil_heatmap_corr <- read.csv("zilucoplan_module_trait_cor_matrix.csv", row.names = 1, header = TRUE)
+zil_heatmap_pval <- read.csv("zilucoplan_module_trait_pvalue_matrix.csv", row.names = 1, header = TRUE)
+zil_combo <- merge(zil_heatmap_corr, zil_heatmap_pval, by = "row.names")
+
+# Rename specific modules
+row.names(zil_heatmap_corr)[row.names(zil_heatmap_corr) == "MEsilver"] <- "MEslategrey"
+row.names(zil_heatmap_pval)[row.names(zil_heatmap_pval) == "MEsilver"] <- "MEslategrey"
+zil_combo <- merge(zil_heatmap_corr, zil_heatmap_pval, by = "row.names")
+
+# Module order
+zil_module_order <- row.names(zil_heatmap_corr)
+colnames(zil_combo)[colnames(zil_combo) == "Row.names"] <- "Modules"
+
+# Module number for barplot
+zil_modules <- read.csv("Module_information_Zilucoplan.csv")
+
+# First, summarize the data by moduleColors
+zil_module_number <- zil_modules %>%
+  group_by(moduleColors) %>%
+  summarize(total_genes = n())
+
+# Change silver to slategrey
+zil_module_number <- as.data.frame(zil_module_number)
+zil_module_number$moduleColors[zil_module_number$moduleColors == "silver"] <- "slategrey"
+zil_module_number <- as.data.frame(zil_module_number)
+zil_cols = zil_module_number$moduleColors 
+
+# Create new column by adding 'ME' in front of 'zil_module_number'
+zil_module_number$Modules <- paste0("ME", zil_module_number$moduleColors)
+
+# Set as row names for ordering the same way as the heatmap 
+row.names(zil_module_number) <- zil_module_number$Modules
+
+# Remove the string "ME" from the 'module_column'
+zil_heatmap_col_order <- gsub("ME", "", row.names(zil_heatmap_corr)) # Use this as the colors instead
+zil_heatmap_col_order[zil_heatmap_col_order == "silver"] <- "slategrey"
+
+# Save this order
+zil_module_order <- row.names(zil_heatmap_corr)
+
+# Reorder the levels in Modules
+zil_module_number$Modules <- factor(zil_module_number$Modules, levels = zil_module_order)
+zil_module_number$moduleColors <- factor(zil_module_number$moduleColors, levels = zil_heatmap_col_order)
+
+# Convert combo dataframe to long format for correlations and p-values
+zil_df_long_corr <- zil_combo %>%
+  pivot_longer(
+    cols = ends_with(".x"),
+    names_to = "Trait",
+    values_to = "Corr"
+  ) %>%
+  mutate(Trait = sub("\\.x$", "", Trait))
+
+zil_df_long_pval <- zil_combo %>%
+  pivot_longer(
+    cols = ends_with(".y"),
+    names_to = "Trait",
+    values_to = "pval"
+  ) %>%
+  mutate(Trait = sub("\\.y$", "", Trait))
+
+# Merge the two data frames based on "Modules" and "Trait"
+zil_result_df <- merge(zil_df_long_corr, zil_df_long_pval, by = c("Modules", "Trait"))
+
+# Reorder columns if needed
+zil_result_df <- zil_result_df[, c("Modules", "Trait", "Corr", "pval")]
+
+# Convert pval to numeric if it's not already
+zil_result_df$Modules <- as.character(zil_result_df$Modules)
+zil_result_df$pval <- as.numeric(zil_result_df$pval)
+zil_result_df$Corr <- as.numeric(zil_result_df$Corr)
+
+# Print the result
+print(zil_result_df)
+
+# Define your custom palette
+zil_my_palette <- rev(c("#67001F", "#B2182B", "#D6604D", "#F4A582", "#FDDBC7",
+                        "#F7F7F7", "#D1E5F0", "#92C5DE", "#4393C3", "#2166AC", "#053061"))
+
+# Reorder the levels in Trait
+zil_result_df$Trait <- factor(zil_result_df$Trait, levels = rev(c("Day", "Remdesivir", "ICU", "D29_Death_RespFailure", "D29_Sustained_Clinical_Response")))
+
+# Reorder the levels in Modules
+zil_result_df$Modules <- factor(zil_result_df$Modules, levels = zil_module_order)
+
+# Create a colour bar
+# Extract colors from Module labels
+zil_module_colors <- sub("^ME", "", zil_module_order)
+
+# Convert module_colors to factor with desired order
+zil_module_colors_factor <- factor(zil_module_colors, levels = unique(zil_module_colors))
+
+# Define the new labels for traits
+zil_new_trait_labels <- c(
+  "Day" = "Day",
+  "Remdesivir" = "Remdesivir",
+  "ICU" = "ICU",
+  "D29_Death_RespFailure" = "Death or Respiratory Failure",
+  "D29_Sustained_Clinical_Response" = "Sustained Clinical Response"
+)
+
+# Create barplot
+zil_barplot <- ggplot(data = zil_module_number, aes(x = Modules, y = total_genes, fill = zil_cols)) +
+  geom_col(aes(x = Modules, y = total_genes, fill = zil_cols), colour = "black", position = "dodge") +
+  geom_text(aes(label = total_genes), position = position_dodge(width = 0.9), vjust = -0.25, size = 2) +
+  ylab("Number of genes") + 
+  ggtitle("Zilucoplan modules")+
+  theme_classic(base_size = 8) +
+  scale_y_continuous(limits = c(0, 10000)) +
+  scale_fill_manual(values = zil_cols) +
+  coord_cartesian(expand = FALSE) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_text(size = 6, vjust = -15),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  theme(legend.position = "none",
+        plot.margin = margin(0, 0, 0, 0),
+        axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+        axis.title.x = element_blank())
+
+# Create the heatmap
+zil_heatmap <- ggplot(zil_result_df) +
+  geom_tile(aes(x = Modules, y = Trait, fill = Corr, width = 1, height = 1)) +
+  scale_fill_gradientn(
+    colors = zil_my_palette,  # Use module colors
+    limits = c(-1, 1), 
+    breaks = c(-1, 0, 1),
+    labels = scales::number_format(accuracy = 0.1)) +
+  geom_text(aes(x = Modules, y = Trait, label = paste(round(Corr, 2))), 
+            vjust = 0, hjust = 0.5, size = 2, color = ifelse(zil_result_df$pval < 0.05, "black", "gray13"), 
+            fontface = ifelse(zil_result_df$pval < 0.05, "bold", "plain")) +
+  geom_text(aes(x = Modules, y = Trait, label = paste("(", format(round(pval, 3), nsmall = 3), ")", sep = "")), # format pvalue to 3 decimal places
+            vjust = 1, hjust = 0.5, size = 2, color = ifelse(zil_result_df$pval < 0.05, "black", "gray13"), 
+            fontface = ifelse(zil_result_df$pval < 0.05, "bold", "plain")) +
+  theme_minimal(base_size = 9.5) +
+  theme(
+    plot.margin = margin(0, 0, 0, 0),
+    panel.grid.major = element_blank(),  # Remove major gridlines
+    panel.grid.minor = element_blank(),  # Remove minor gridlines
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title.x = element_blank(),
+    legend.text = element_text(size = 6),  # Adjust legend text size
+    legend.title = element_text(size = 6),  # Adjust legend title size
+    plot.title = element_text(size = 10),  # Adjust title text size
+    legend.key.width = unit(0.2, "cm"),  # Adjust legend color scale width
+    legend.key.height = unit(0.5, "cm")) +  # Adjust legend color scale height
+  labs(
+    x = "",
+    y = "",
+    fill = "Correlation") +
+  scale_y_discrete(labels = zil_new_trait_labels) +
+  theme(legend.position = "right") +
+  coord_fixed(ratio = 1) +
+  new_scale_fill() +
+  geom_tile(data = tibble(Modules = paste0(zil_module_order),
+                          d = zil_module_colors_factor),
+            aes(x = Modules, y = 0.25, fill = d, height = 0.5)) +
+  scale_x_discrete(labels = c("MEslategrey" = "MEsilver", levels(zil_result_df$Modules))) +
+  scale_fill_identity()
+
+# Combine the two plots using patchwork
+zil_plot <- zil_barplot / plot_spacer() / zil_heatmap + plot_layout(heights = c(0.25, -0.2, 1)) 
+# plot_annotation(title = 'Zilucoplan Modules') & theme(plot.title = element_text(hjust = 0.5))
+
+# Display the combined plot
+print(zil_plot)
+
+```
+
+#### (iv) Standard of Care
+
+```{r}
+# Read in data
+### for heatmap
+soc_heatmap_corr <- read.csv("soc_module_trait_cor_matrix.csv", row.names = 1, header = TRUE)
+soc_heatmap_pval <- read.csv("soc_module_trait_pvalue_matrix.csv", row.names = 1, header = TRUE)
+soc_combo <- merge(soc_heatmap_corr, soc_heatmap_pval, by = "row.names")
+
+# Rename specific modules - again silver won't show as a colour so using slategrey here as a close sub
+row.names(soc_heatmap_corr)[row.names(soc_heatmap_corr) == "MEsilver"] <- "MEslategrey"
+row.names(soc_heatmap_pval)[row.names(soc_heatmap_pval) == "MEsilver"] <- "MEslategrey"
+soc_combo <- merge(soc_heatmap_corr, soc_heatmap_pval, by = "row.names")
+
+# Module order
+soc_module_order <- row.names(soc_heatmap_corr)
+colnames(soc_combo)[colnames(soc_combo) == "Row.names"] <- "Modules"
+
+# Module number for barplot
+soc_modules <- read.csv("Module_information_soc.csv")
+
+# First, summarize the data by moduleColors
+soc_module_number <- soc_modules %>%
+  group_by(moduleColors) %>%
+  summarize(total_genes = n())
+
+# Change silver to slategrey
+soc_module_number <- as.data.frame(soc_module_number)
+soc_module_number$moduleColors[soc_module_number$moduleColors == "silver"] <- "slategrey"
+soc_module_number <- as.data.frame(soc_module_number)
+soc_cols = soc_module_number$moduleColors 
+
+# Create new column by adding 'ME' in front of 'soc_module_number'
+soc_module_number$Modules <- paste0("ME", soc_module_number$moduleColors)
+
+# Set as row names for ordering the same way as the heatmap 
+row.names(soc_module_number) <- soc_module_number$Modules
+
+# Remove the string "ME" from the 'module_column'
+soc_heatmap_col_order <- gsub("ME", "", row.names(soc_heatmap_corr)) # Use this as the colors instead
+soc_heatmap_col_order[soc_heatmap_col_order == "silver"] <- "slategrey"
+
+# Save this order
+soc_module_order <- row.names(soc_heatmap_corr)
+
+# Reorder the levels in Modules
+soc_module_number$Modules <- factor(soc_module_number$Modules, levels = soc_module_order)
+soc_module_number$moduleColors <- factor(soc_module_number$moduleColors, levels = soc_heatmap_col_order)
+
+# Convert combo dataframe to long format for correlations and p-values
+soc_df_long_corr <- soc_combo %>%
+  pivot_longer(
+    cols = ends_with(".x"),
+    names_to = "Trait",
+    values_to = "Corr"
+  ) %>%
+  mutate(Trait = sub("\\.x$", "", Trait))
+
+soc_df_long_pval <- soc_combo %>%
+  pivot_longer(
+    cols = ends_with(".y"),
+    names_to = "Trait",
+    values_to = "pval"
+  ) %>%
+  mutate(Trait = sub("\\.y$", "", Trait))
+
+# Merge the two data frames based on "Modules" and "Trait"
+soc_result_df <- merge(soc_df_long_corr, soc_df_long_pval, by = c("Modules", "Trait"))
+
+# Reorder columns if needed
+soc_result_df <- soc_result_df[, c("Modules", "Trait", "Corr", "pval")]
+
+# Convert pval to numeric if it's not already
+soc_result_df$Modules <- as.character(soc_result_df$Modules)
+soc_result_df$pval <- as.numeric(soc_result_df$pval)
+soc_result_df$Corr <- as.numeric(soc_result_df$Corr)
+
+# Print the result
+print(soc_result_df)
+
+# Define your custom palette
+soc_my_palette <- rev(c("#67001F", "#B2182B", "#D6604D", "#F4A582", "#FDDBC7",
+                        "#F7F7F7", "#D1E5F0", "#92C5DE", "#4393C3", "#2166AC", "#053061"))
+
+# Reorder the levels in Trait
+soc_result_df$Trait <- factor(soc_result_df$Trait, levels = rev(c("Day", "Remdesivir", "ICU", "D29_Death_RespFailure", "D29_Sustained_Clinical_Response")))
+
+# Reorder the levels in Modules
+soc_result_df$Modules <- factor(soc_result_df$Modules, levels = soc_module_order)
+
+# Create a colour bar
+# Extract colors from Module labels
+soc_module_colors <- sub("^ME", "", soc_module_order)
+
+# Convert module_colors to factor with desired order
+soc_module_colors_factor <- factor(soc_module_colors, levels = unique(soc_module_colors))
+
+# Define the new labels for traits
+soc_new_trait_labels <- c(
+  "Day" = "Day",
+  "Remdesivir" = "Remdesivir",
+  "ICU" = "ICU",
+  "D29_Death_RespFailure" = "Death or Respiratory Failure",
+  "D29_Sustained_Clinical_Response" = "Sustained Clinical Response"
+)
+
+# Create barplot
+soc_barplot <- ggplot(data = soc_module_number, aes(x = Modules, y = total_genes, fill = soc_cols)) +
+  geom_col(aes(x = Modules, y = total_genes, fill = soc_cols), colour = "black", position = "dodge") +
+  geom_text(aes(label = total_genes), position = position_dodge(width = 0.9), vjust = -0.25, size = 2) +
+  ylab("Number of genes") + 
+  ggtitle("Standard of Care modules")+
+  theme_classic(base_size = 8) +
+  scale_y_continuous(limits = c(0, 10000)) +
+  scale_fill_manual(values = soc_cols) +
+  coord_cartesian(expand = FALSE) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_text(size = 6, vjust = -15),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  theme(legend.position = "none",
+        plot.margin = margin(0, 0, 0, 0),
+        axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+        axis.title.x = element_blank())
+
+# Create the heatmap
+soc_heatmap <- ggplot(soc_result_df) +
+  geom_tile(aes(x = Modules, y = Trait, fill = Corr, width = 1, height = 1)) +
+  scale_fill_gradientn(
+    colors = soc_my_palette,  # Use module colors
+    limits = c(-1, 1), 
+    breaks = c(-1, 0, 1),
+    labels = scales::number_format(accuracy = 0.1)) +
+  geom_text(aes(x = Modules, y = Trait, label = paste(round(Corr, 2))), 
+            vjust = 0, hjust = 0.5, size = 2, color = ifelse(soc_result_df$pval < 0.05, "black", "gray13"), 
+            fontface = ifelse(soc_result_df$pval < 0.05, "bold", "plain")) +
+  geom_text(aes(x = Modules, y = Trait, label = paste("(", format(round(pval, 3), nsmall = 3), ")", sep = "")), # format pvalue to 3 decimal places
+            vjust = 1, hjust = 0.5, size = 2, color = ifelse(soc_result_df$pval < 0.05, "black", "gray13"), 
+            fontface = ifelse(soc_result_df$pval < 0.05, "bold", "plain")) +
+  theme_minimal(base_size = 9.5) +
+  theme(
+    plot.margin = margin(0, 0, 0, 0),
+    panel.grid.major = element_blank(),  # Remove major gridlines
+    panel.grid.minor = element_blank(),  # Remove minor gridlines
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title.x = element_blank(),
+    legend.text = element_text(size = 6),  # Adjust legend text size
+    legend.title = element_text(size = 6),  # Adjust legend title size
+    plot.title = element_text(size = 10),  # Adjust title text size
+    legend.key.width = unit(0.2, "cm"),  # Adjust legend color scale width
+    legend.key.height = unit(0.5, "cm")) +  # Adjust legend color scale height
+  labs(
+    x = "",
+    y = "",
+    fill = "Correlation") +
+  scale_y_discrete(labels = soc_new_trait_labels) +
+  theme(legend.position = "right") +
+  coord_fixed(ratio = 1) +
+  new_scale_fill() +
+  geom_tile(data = tibble(Modules = paste0(soc_module_order),
+                          d = soc_module_colors_factor),
+            aes(x = Modules, y = 0.25, fill = d, height = 0.5)) +
+  scale_x_discrete(labels = c("MEslategrey" = "MEsilver", levels(soc_result_df$Modules))) +
+  scale_fill_identity()
+
+# Combine the two plots using patchwork
+soc_plot <- soc_barplot / plot_spacer() / soc_heatmap + plot_layout(heights = c(0.25, -0.2, 1)) 
+# plot_annotation(title = 'Standard of Care Modules') & theme(plot.title = element_text(hjust = 0.5))
+
+# Display the combined plot
+print(soc_plot)
+
+```
+
+#### (v) Combined plot for manuscript figure
+```{r fig.width= 20, fig.height=10}
+#combined one
+# Create the top row of plots (SOC and ZIL)
+top_row <- (soc_barplot /plot_spacer() / soc_heatmap + plot_layout(heights = c(0.25, -0.1, 1))) |  # Combine without spacer
+  zil_barplot / plot_spacer() /zil_heatmap + plot_layout(heights = c(0.25, -0.1, 1))
+
+# Create the bottom row of plots (BEM and TOZ)
+bottom_row <- (bem_barplot /plot_spacer() / bem_heatmap + plot_layout(heights = c(0.25, -0.225,1)) |  # Combine without spacer
+                 toz_barplot / plot_spacer() /toz_heatmap + plot_layout(heights = c(0.25, -0.25, 1)))
+
+# Combine both rows, adjusting the space between left and right
+combined_plot <- top_row /
+  bottom_row + 
+  plot_layout(
+    widths = c(5, 0.01, 5),   # Reduce space between left and right columns with small value for middle
+    heights = c(4, 4),        # Adjust height for top and bottom rows
+    guides = "collect", # Collect legends if necessary
+    
+  )
+# Add figure labels manually
+combined_plot <- combined_plot + 
+  plot_annotation(
+    tag_levels = 'A',          # Labels as "A", "B", "C", etc.
+    tag_prefix = "(",           # No prefix for simplicity
+    tag_suffix = ")",           # No suffix
+    tag_sep = "."              # Separator after the label
+  ) &
+  theme(
+    plot.tag.position = c(0.1, 1),   # Adjust position of the figure label (top-left corner)
+    plot.tag = element_text(size = 8, face = "bold")  # Customize appearance of labels
+  )
+
+# Display the final combined plot with labels
+print(combined_plot)
+```
+
+## 2b Facet barplot of significant modules 
+
+This is again using the correlation matrix and pval matrix output for each treatment arm saved in 04_coexpression_pywgcna
+
+```{r fig.height = 8, fig.width=5}
+#set cols:
+# Define a color palette
+cols <- rev(scales::hue_pal()(5))
+cols <- setNames(cols, levels(combined_sig_df$Trait))
+
+
+# Function to clean up and process the data for each treatment
+process_data <- function(corr_file, pval_file, treatment_name) {
+  # Read corr and pval data
+  corr_data <- read.csv(corr_file, row.names = 1, header = TRUE)
+  pval_data <- read.csv(pval_file, row.names = 1, header = TRUE)
+  
+  # Merge the correlation and p-value data
+  combo <- merge(corr_data, pval_data, by = "row.names")
+  colnames(combo)[colnames(combo) == "Row.names"] <- "Modules"
+  
+  # Reshape data
+  long_corr <- combo %>%
+    pivot_longer(cols = ends_with(".x"), names_to = "Trait", values_to = "Corr") %>%
+    mutate(Trait = sub("\\.x$", "", Trait))
+  
+  long_pval <- combo %>%
+    pivot_longer(cols = ends_with(".y"), names_to = "Trait", values_to = "pval") %>%
+    mutate(Trait = sub("\\.y$", "", Trait))
+  
+  # Combine correlation and p-value data
+  df <- merge(long_corr, long_pval, by = c("Modules", "Trait"))
+  
+  # Filter by p-value < 0.05
+  df <- df %>%
+    mutate(Treatment = treatment_name) %>%
+    filter(pval < 0.05) %>%
+    mutate(Modules = as.character(Modules),
+           Trait = gsub("D29_Death_RespFailure", "Death or Respiratory Failure", Trait),
+           Trait = gsub("D29_Sustained_Clinical_Response", "Sustained Clinical Response", Trait))
+  
+  return(df)
+}
+
+# File paths
+file_paths <- list(
+  Bem = list(corr = "bemcentinib_module_trait_cor_matrix.csv", 
+             pval = "bemcentinib_module_trait_pvalue_matrix.csv"),
+  Zil = list(corr = "zilucoplan_module_trait_cor_matrix.csv", 
+             pval = "zilucoplan_module_trait_pvalue_matrix.csv"),
+  Toz = list(corr = "tozorakimab_module_trait_cor_matrix.csv", 
+              pval = "tozorakimab_module_trait_pvalue_matrix.csv"),
+  SoC = list(corr = "soc_module_trait_cor_matrix.csv", 
+             pval = "soc_module_trait_pvalue_matrix.csv")
+)
+
+# Process each dataset and combine into one data frame
+combined_sig_df <- bind_rows(
+  process_data(file_paths$Bem$corr, file_paths$Bem$pval, "Bemcentinib"),
+  process_data(file_paths$Zil$corr, file_paths$Zil$pval, "Zilucoplan"),
+  process_data(file_paths$Toz$corr, file_paths$Toz$pval, "Tozorakimab"),
+  process_data(file_paths$SoC$corr, file_paths$SoC$pval, "SoC")
+)
+
+# Add color based on Treatment
+treatment_colors <- c(Bemcentinib = "forestgreen", Tozorakimab = "yellow", Zilucoplan = "red", SoC = "skyblue")
+combined_sig_df <- combined_sig_df %>%
+  mutate(colour = treatment_colors[Treatment])
+
+swr = function(string, nwrap=10) {
+  paste(strwrap(string, width=nwrap), collapse="\n")
+}
+swr = Vectorize(swr)
+# Create line breaks in Year
+combined_sig_df$Trait = swr(combined_sig_df$Trait)
+# Create levels for colouring facets
+treatment_levels <- unique(combined_sig_df$Treatment)
+trait_levels <- unique(combined_sig_df$Trait)
+
+# Create a data frame with all possible combinations of Treatment and Trait
+colours <- expand.grid(Treatment = treatment_levels, Trait = trait_levels)
+
+# Add Corr and Modules columns to colours dataframe
+colours$Corr <- 1
+colours$Modules <- 1
+
+# Add specific colour column based on Treatment
+colours <- colours %>%
+  mutate(colour = treatment_colors[Treatment])
+
+# Set the desired order of levels for Treatment
+desired_levels <- c("Bemcentinib", "Tozorakimab", "Zilucoplan", "SoC")
+
+# Reorder the levels of the Treatment factor variable
+combined_sig_df$Treatment <- factor(combined_sig_df$Treatment, levels = desired_levels)
+
+
+# Create a bar plot
+ggplot(combined_sig_df, aes(x = Corr, y = Modules, fill = Corr)) +
+  theme_bw() +
+  geom_rect(data = colours, aes(xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf), fill = colours$colour, alpha = 0.15)+ 
+  geom_col(position = position_dodge2(preserve = "single"), color = "black") +
+  geom_vline(xintercept = 0, color = "black", linetype = "solid", size = 0.5) +
+  scale_fill_gradient2(name = "Correlation Score", low = "darkblue", high = "darkred", limits = c(-1, 1)) +
+  scale_x_continuous(breaks = c(-1, 0, 1), limits = c(-1, 1)) +
+  facet_grid(Treatment ~ Trait, scales = "free", space = "free", switch = "y") +
+  scale_y_discrete(position = "right") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(),
+        axis.title.x = element_blank(), axis.title.y = element_blank(), legend.position = "bottom")
+```
+
+
+## 2c Consensus bubble plot of treatment arms vs standard of care
+
+Here plotting the jaccard matrix between each treatment arm and the standard of care to visualise the modules with significant overlap
+
+First prepare the data
+```{r}
+# Define variables
+drug_list <- list(
+  list(
+    drug = "Tozorakimab",
+    study = "Tozorakimab_vs_SoC"
+  ),
+  list(
+    drug = "Bemcentinib",
+    study = "Bemcentinib_vs_SoC"
+  ),
+  list(
+    drug = "Zilucoplan",
+    study = "Zilucoplan_vs_SoC"
+  )
+)
+
+# Function to read and preprocess data - these are the jaccard and pvals for each treatment v soc consensus analysis
+read_and_preprocess <- function(drug) {
+  # Dynamically create file paths based on the drug name
+  jaccard_file_name <- paste0("jaccard_matrix_soc_", drug, ".csv")
+  p_value_file_name <- paste0("p_value_matrix_soc_", drug, ".csv")
+  
+  # Read the data
+  jaccard <- read.csv(jaccard_file_name, row.names = 1, header = TRUE, check.names = FALSE)
+  pval <- read.csv(p_value_file_name, row.names = 1, header = TRUE, check.names = FALSE)
+  return(list(jaccard = jaccard, pval = pval))
+}
+
+# Function to transform to long format and combine
+combine_data <- function(jaccard, pval) {
+  jaccard_long <- jaccard %>%
+    as.data.frame() %>%
+    rownames_to_column("row_names") %>%
+    gather(key = "column_names", value = "value.Jaccard", -row_names)
+  
+  pval_long <- pval %>%
+    as.data.frame() %>%
+    rownames_to_column("row_names") %>%
+    gather(key = "column_names", value = "value.pvalue", -row_names)
+  
+  combined <- left_join(jaccard_long, pval_long, by = c("row_names", "column_names")) %>%
+    mutate(Combination = paste(row_names, column_names, sep = "-"))
+  
+  return(combined)
+}
+
+# Function to filter and process combined data - we only need to keep one set of comparisons or the plot will be duplicated
+filter_data <- function(data, drug) {
+  filtered <- data %>%
+    filter(row_names != column_names) %>%
+    filter(
+      !(grepl("SoC_Core", row_names) & grepl("SoC_Core", column_names)) &
+        !(grepl(drug, row_names) & grepl(drug, column_names))
+    ) %>%
+    mutate(
+      pair = paste(pmin(row_names, column_names), pmax(row_names, column_names), sep = "-")
+    ) %>%
+    distinct(pair, .keep_all = TRUE) %>%
+    select(-pair) %>%
+    mutate(log_pvalue = log10(value.pvalue + 1e-320))
+  
+  return(filtered)
+}
+
+# Run functions to process data
+# Store filtered data frames
+filtered_data_list <- list()
+
+for (drug_info in drug_list) {
+  data <- read_and_preprocess(drug_info$drug)
+  combined <- combine_data(data$jaccard, data$pval)
+  filtered <- filter_data(combined, drug_info$drug)
+  
+  # Store the filtered data frame in the list
+  filtered_data_list[[drug_info$drug]] <- filtered
+}
+
+# Assign filtered data frames to the global environment
+toz_filtered <- filtered_data_list[["Tozorakimab"]]
+bem_filtered <- filtered_data_list[["Bemcentinib"]]
+zil_filtered <- filtered_data_list[["Zilucoplan"]]
+# Now, `toz_filtered`, `bem_filtered`, and `zil_filtered` are accessible as data frames in the environment.
+```
+
+Now plot the combined consensus bubble plot
+```{r fig.width=12, fig.height=5}
+
+# Create the plot with the filtered data
+toz_filtered$title <- "Tozorakimab"
+toz_plot<-ggplot(toz_filtered, aes(x = row_names, y = column_names, size = as.numeric(value.Jaccard), color = as.numeric(log_pvalue))) +
+  geom_point(alpha = 0.7) +
+  geom_point(color=ifelse(toz_filtered$log_pvalue > -1.30103, 'gray', NA)) +
+  theme_bw() +
+  theme(
+    
+    plot.margin = margin(0, 1, 0, 0),
+    panel.grid.major = element_blank(),  # Remove major gridlines
+    panel.grid.minor = element_blank()) +  # Remove minor gridlines
+  theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1),
+        axis.title = element_blank(),
+        strip.text.x = element_text(size = 20)) +
+  scale_size_continuous(range = c(2, 10), name = "Jaccard score") +
+  scale_color_viridis(trans = "reverse", name = "log10(p-value)") +
+  facet_grid(. ~ title)+
+  theme(
+    legend.position = "none",
+    strip.background = element_rect(
+      colour = "black",
+      fill = alpha("yellow", 0.5)  # Adjust the alpha value (0.0 to 1.0)
+    )
+  )
+
+
+bem_filtered$title <- "Bemcentinib"
+bem_plot<-ggplot(bem_filtered, aes(x = row_names, y = column_names, size = as.numeric(value.Jaccard), color = as.numeric(log_pvalue))) +
+  geom_point(alpha = 0.7) +
+  geom_point(color=ifelse(bem_filtered$log_pvalue > -1.30103, 'gray', NA)) +
+  theme_bw() +
+  theme(
+    plot.margin = margin(0, 1, 0, 1),
+    panel.grid.major = element_blank(),  # Remove major gridlines
+    panel.grid.minor = element_blank()) +  # Remove minor gridlines
+  theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1),
+        axis.title = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.text.x = element_text(size = 20)) +
+  scale_size_continuous(range = c(2, 10), name = "Jaccard score") +
+  scale_color_viridis(trans = "reverse", name = "log10(p-value)") +
+  facet_grid(. ~ title)+
+  theme(
+    legend.position = "none",
+    strip.background = element_rect(
+      colour = "black",
+      fill = alpha("forestgreen", 0.5)  # Adjust the alpha value (0.0 to 1.0)
+    )
+  )
+
+
+zil_filtered$title <- "Zilucoplan"
+zil_plot<-ggplot(zil_filtered, aes(x = row_names, y = column_names, size = as.numeric(value.Jaccard), color = as.numeric(log_pvalue))) +
+  geom_point(alpha = 0.7) +
+  geom_point(color=ifelse(zil_filtered$log_pvalue > -1.30103, 'gray', NA)) +
+  theme_bw() +
+  theme(
+    plot.margin = margin(0, 0, 0, 0.1),
+    panel.grid.major = element_blank(),  # Remove major gridlines
+    panel.grid.minor = element_blank()) +  # Remove minor gridlines
+  theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1),
+        axis.title = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.text.x = element_text(size = 20)) +
+  scale_size_continuous(range = c(2, 10), name = "Jaccard score") +
+  scale_color_viridis(trans = "reverse", name = "log10(p-value)") +
+  facet_grid(. ~ title)+
+  theme(
+    # legend.position = "none",
+    strip.background = element_rect(
+      colour = "black",
+      fill = alpha("red", 0.5)  # Adjust the alpha value (0.0 to 1.0)
+    )
+  )
+
+# Combine the two plots using patchwork
+plot <- toz_plot | bem_plot | zil_plot
+plot+ plot_layout(       # Adjust height for top and bottom rows
+  guides = "collect"# Collect legends if necessary
+  
+)
+
+
+```
+
+## 2d Hub gene extraction for visualisation in cytoscape
+
+For each treatment module within a cluster, the top 10 hub genes, based on connectivity score are extracted for plotting in cytoscape. The input file is the modulecolour_top_hub_genes.csv for each module saved from the 04_coexpression_pywgcna using the top_n_hub_genes function. This code pulls in these files which are saved in subdirectories of treatment/modulecolour depending on the treatment and modulecolour
+
+```{r}
+# Drug names and associated modules
+drug_modules <- list(
+  Bemcentinib = c("gainsboro", "tomato", "linen", "darksalmon", "snow", "white", "rosybrown", "darkgrey", "silver", "lightcoral"),
+  Tozorakimab = c("salmon", "tan", "chocolate", "sandybrown", "orangered", "burlywood", "moccasin", "gainsboro"),
+  Zilucoplan = c("brown", "coral", "black", "gainsboro", "indianred", "darkgrey", "lightgrey", "chocolate")
+)
+
+# Cluster definitions
+clusters <- list(
+  Cluster1 = list(Bemcentinib = c("gainsboro"), Tozorakimab = c("salmon"), Zilucoplan = c("brown")),
+  Cluster2 = list(Bemcentinib = c("tomato", "linen"), Tozorakimab = c("tan"), Zilucoplan = c("coral")),
+  Cluster3 = list(Bemcentinib = c("rosybrown"), Tozorakimab = c("orangered", "burlywood"), Zilucoplan = c("indianred")),
+  Cluster4 = list(Bemcentinib = c("snow", "white"), Tozorakimab = c("sandybrown"), Zilucoplan = c("gainsboro")),
+ Cluster5 = list(Bemcentinib = c("darksalmon"), Tozorakimab = c("chocolate"), Zilucoplan = c("black")),
+   Cluster6 = list(Bemcentinib = c("darkgrey", "silver", "lightcoral"), Tozorakimab = c("moccasin", "gainsboro"), Zilucoplan = c("darkgrey", "lightgrey", "chocolate"))
+)
+
+
+# Helper function to create variable names and file paths
+create_variable_and_read <- function(drug, color) {
+  var_name <- paste0(tolower(drug), "_", color)
+  file_path <- paste0("./", drug, "/hub_genes/", color, "_top_hub_genes.csv")
+  df <- read.csv(file_path)
+  
+  # Add new columns
+  df$Treatment_Arm <- drug
+  df$Module <- color
+  df$Treatment_Arm_Module <- paste0(drug, "_", color)
+  
+  # Replace empty strings in gene_name with corresponding X value
+  df$gene_name[df$gene_name == ""] <- as.character(df$X[df$gene_name == ""]) 
+  # Order by connectivity and extract top rows
+  df <- df[order(-df$connectivity),]
+  top10 <- head(df, 10)
+  
+  # Assign to global environment
+  assign(paste0(var_name, "_top10"), top10, envir = .GlobalEnv)
+ }
+
+# Loop through each drug and their associated colors
+for (drug in names(drug_modules)) {
+  for (color in drug_modules[[drug]]) {
+    create_variable_and_read(drug, color)
+  }
+}
+
+# Function to collect cluster data
+collect_cluster_data <- function(cluster_name, cluster_drugs, top_n) {
+  cluster_data <- data.frame()
+  
+  for (drug in names(cluster_drugs)) {
+    for (color in cluster_drugs[[drug]]) {
+      var_name <- paste0(tolower(drug), "_", color, "_top", top_n)
+      if (exists(var_name, .GlobalEnv)) {
+        df <- get(var_name)
+        cluster_data <- rbind(cluster_data, df)
+      }
+    }
+  }
+  
+  return(cluster_data)
+}
+
+# Loop through each cluster and create top_n data frames and node files
+for (n in 10) {
+  for (i in 1:6) {
+    # Collect cluster data
+    cluster_data <- collect_cluster_data(paste0("Cluster", i), clusters[[paste0("Cluster", i)]], n)
+    cluster_var_name <- paste0("cluster", i, "_top", n)
+    assign(cluster_var_name, cluster_data)
+    
+    # Save the cluster data to CSV
+    write.csv(cluster_data, paste0("Cluster", i, "_top", n, "_all_treatments.csv"), quote = FALSE)
+    
+    # Create node file for top 10 only
+    if (n == 10) {
+      # Start with the existing cluster data
+      node_file <- cluster_data
+      
+      # Remove the first five columns
+      node_file <- node_file[, -c(1:5)]
+      
+      # Add three new rows for Bemcentinib, Tozorakimab, and Zilucoplan
+      new_rows <- data.frame(
+        gene_name = c("Bemcentinib", "Tozorakimab", "Zilucoplan"),
+        gene_biotype = NA,
+        Treatment_Arm = c("Bemcentinib", "Tozorakimab", "Zilucoplan"),
+        Module = NA,
+        Treatment_Arm_Module = c("Bemcentinib", "Tozorakimab", "Zilucoplan")
+      )
+      node_file <- rbind(node_file, new_rows)
+      
+      # Count occurrences of each gene_name
+      gene_counts <- table(node_file$gene_name)
+      
+      # Add the overlap_colour column
+      node_file$overlap_colour <- ifelse(
+        node_file$gene_name %in% c("Bemcentinib", "Tozorakimab", "Zilucoplan"),
+        node_file$gene_name,  # For treatments, use the treatment name
+        ifelse(duplicated(node_file$gene_name) | duplicated(node_file$gene_name, fromLast = TRUE),
+               "yes",  # If duplicated, set as "yes"
+               node_file$Treatment_Arm  # If not duplicated, use the Treatment_Arm
+        )
+      )
+      
+      # Add the overlap_size column
+      node_file$overlap_size <- ifelse(
+        node_file$gene_name %in% c("Bemcentinib", "Tozorakimab", "Zilucoplan"),
+        node_file$gene_name,  # For treatments, use the treatment name
+        as.integer(gene_counts[node_file$gene_name])  # For others, use count
+      )
+      
+      # Add the type column
+      node_file$type <- ifelse(
+        node_file$gene_name %in% c("Bemcentinib", "Tozorakimab", "Zilucoplan"),
+        "treatment",
+        "gene"
+      )
+      
+      # Save the node file to CSV
+      write.csv(node_file, paste0("Cluster", i, "_top10_all_treatments_node.csv"), quote = FALSE)
+    }
+  }
+}
+
+
+```
+
+The output file will have columns to be used for aesthetic mapping (colour, size etc) in cytoscape.
+
+
