@@ -141,112 +141,184 @@ print(zil_tbl)
 
 
 Now plotting 
-- First plot stacked bar charts for each individual sample counts for each arm
-- Second, plot stacked bar chart showing summarised data for all samnples within each arm
-- Third, plot only treatment arms for paper figure
-- Fourth plot only standard of care for paper figure
+Using the cibersortx proportions to plot as stacked barcharts (props turned into percentages)
 
 ```{r fig.height=15, fig.width = 12}
 
-## STACKED BAR CHART individual samples
-csort_longer<- csort_combo %>% pivot_longer(c(2:23),
-                                           names_to = "Cell_Type",
-                                           values_to = "Prop")
-
+# Split the data into separate dataframes for each Treatment_Arm and turn proportions into percentage for plotting
 csort_longer <- csort_combo %>%
   pivot_longer(
     cols = 2:23,                    # Columns to pivot
     names_to = "Cell_Type",         # Name for the new key column
     values_to = "Prop"              # Name for the new value column
-  )
-
-#generate percentages
-csort_longer$Percentages <- csort_longer$Prop * 100
-csort_longer<-csort_longer%>%
-  mutate(Unique_ID = str_extract(Mixture, "(?<=_)[^_]+(?=_[^_]+$)")) # get unique ID
+  ) %>%
+  mutate(Percentages = Prop * 100)
 
 
-#view indiviual samples for each arm
-ggplot(csort_longer, aes(x = Mixture, y = Percentages, fill = Cell_Type)) +
-  geom_bar(stat = "identity", position="stack") +
-  labs(x = "Samples", y = "Percentage", fill = "Cell Type") +
-  theme_bw(base_size = 14) +
-  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
-  #theme(axis.text.y=element_text(size=14)) +
-  #theme(axis.text.x=element_text(size=10, angle = 45, hjust =1)) +
-  theme(axis.text.x=element_blank()) +
-  theme(axis.ticks = element_blank())+
-  facet_wrap(~Treatment_Arm+Day, scales="free", ncol=2)+
-  scale_fill_manual(values=col_vector[c(1:3, 9:60)])+
-  scale_y_continuous(expand = c(0,0), limits = c(0, 101))+
-  guides(fill = guide_legend(ncol = 1))
+standard_of_care_data <- csort_longer %>% filter(Treatment_Arm == "Standard of Care")
+bemcentinib_data <- csort_longer %>% filter(Treatment_Arm == "Bemcentinib")
+tozorakimab_data <- csort_longer %>% filter(Treatment_Arm == "Tozorakimab")
+zilucoplan_data <- csort_longer %>% filter(Treatment_Arm == "Zilucoplan")
 
-#Now want to plot summarised cell counts for each day for ech treatment group
-# Aggregate  data to calculate the median percentages
-csort_median <- csort_longer %>%
-  group_by(Treatment_Arm, Day, Sustained_Clinical_Response_by_D29, Cell_Type, Unique_ID) %>%
-  summarise(Median_Percentage = median(Percentages, na.rm = TRUE))
 
-# Normalize the median percentages so they sum to 100% for each Treatment_Arm and Day
-csort_normalized <- csort_median %>%
+# Aggregate percentage for each group and normalise within the groups
+
+# For Standard of Care
+csort_median_soc <- standard_of_care_data %>%
+  group_by(Treatment_Arm, Day, Cell_Type) %>%
+  summarise(Median_Percentage = median(Percentages, na.rm = TRUE), .groups = "drop")
+
+csort_normalized_soc <- csort_median_soc %>%
   group_by(Treatment_Arm, Day) %>%
   mutate(Normalized_Percentage = Median_Percentage / sum(Median_Percentage) * 100)
 
-# Set the levels for the "Day" column
-csort_normalized$Day <- factor(csort_normalized$Day, levels = c("D1", "D5"))
+# For Bemcentinib
+csort_median_bemcentinib <- bemcentinib_data %>%
+  group_by(Treatment_Arm, Day, Cell_Type) %>%
+  summarise(Median_Percentage = median(Percentages, na.rm = TRUE), .groups = "drop")
 
-# Set the levels of the "Drug_Arm" column
-#change MEDI£506 to Tozorakimab here for lotting
-csort_normalized$Treatment_Arm <- factor(csort_normalized$Treatment_Arm, levels = c("Standard of Care", "Bemcentinib", "Tozorakimab", "Zilucoplan"))
+csort_normalized_bemcentinib <- csort_median_bemcentinib %>%
+  group_by(Treatment_Arm, Day) %>%
+  mutate(Normalized_Percentage = Median_Percentage / sum(Median_Percentage) * 100)
+
+# For Tozorakimab
+csort_median_tozorakimab <- tozorakimab_data %>%
+  group_by(Treatment_Arm, Day, Cell_Type) %>%
+  summarise(Median_Percentage = median(Percentages, na.rm = TRUE), .groups = "drop")
+
+csort_normalized_tozorakimab <- csort_median_tozorakimab %>%
+  group_by(Treatment_Arm, Day) %>%
+  mutate(Normalized_Percentage = Median_Percentage / sum(Median_Percentage) * 100)
+
+# For Zilucoplan
+csort_median_zilucoplan <- zilucoplan_data %>%
+  group_by(Treatment_Arm, Day, Cell_Type) %>%
+  summarise(Median_Percentage = median(Percentages, na.rm = TRUE), .groups = "drop")
+
+csort_normalized_zilucoplan <- csort_median_zilucoplan %>%
+  group_by(Treatment_Arm, Day) %>%
+  mutate(Normalized_Percentage = Median_Percentage / sum(Median_Percentage) * 100)
+
+# Recombine the data into one dataset
+csort_combined <- bind_rows(csort_normalized_soc, 
+                            csort_normalized_bemcentinib,
+                            csort_normalized_tozorakimab,
+                            csort_normalized_zilucoplan)
+
+# Now use this for plotting
+# Standard of Care Day
+standard_of_care_data_day <- csort_combined %>%
+  filter(Treatment_Arm == "Standard of Care")
 
 
-ggplot(csort_normalized, aes(x = Day, y = Normalized_Percentage, fill = Cell_Type)) +
+ggplot(standard_of_care_data_day, aes(x = Normalized_Percentage, y = Day, fill = Cell_Type)) +
   geom_bar(stat = "identity", position="stack") +
-  labs(x = "Day", y = "Percentage", fill = "Cell Type") +
-  theme_bw(base_size = 14) +
+  labs(x = "Percentage", y = "Day", fill = "Cell Type") +
+  theme_bw(base_size = 16) +
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
-  theme(axis.text.x=element_text(size=14)) +
+  theme(axis.text.x=element_text(size=16)) +
   theme(axis.ticks = element_blank()) +
-  facet_wrap(~Treatment_Arm, scales="free", ncol=2) +
   scale_fill_manual(values=col_vector[c(1:3, 9:60)]) +
-  scale_y_continuous(expand = c(0,0), limits = c(0, 101)) +
-  guides(fill = guide_legend(ncol = 1))
+  scale_x_continuous(expand = c(0,0), limits = c(0, 101)) +
+  guides(fill = guide_legend(ncol = 1))+ 
+  theme(legend.position = "none")
 
-
-# Filter the data only to keep the drugs
-drug_data <- csort_normalized %>%
+# All 3 drugs for Day
+drug_data_day <- csort_combined %>%
   filter(Treatment_Arm != "Standard of Care")
 
-ggplot(drug_data, aes(x = Day, y = Normalized_Percentage, fill = Cell_Type)) +
+ggplot(drug_data_day, aes(x = Day, y = Normalized_Percentage, fill = Cell_Type)) +
   geom_bar(stat = "identity", position="stack") +
   labs(x = "Day", y = "Percentage", fill = "Cell Type") +
-  theme_bw(base_size = 14) +
+  theme_bw(base_size = 20) +
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
-  theme(axis.text.x=element_text(size=14)) +
+  theme(axis.text.x=element_text(size=20)) +
   theme(axis.ticks = element_blank()) +
   scale_fill_manual(values=col_vector[c(1:3, 9:60)]) +
   scale_y_continuous(expand = c(0,0), limits = c(0, 101)) +
   guides(fill = guide_legend(ncol = 1))+
   facet_wrap(~Treatment_Arm)
 
-# Now looking at SoC arm
-# Filter the data for the "Standard of Care" arm
-standard_of_care_data <- csort_normalized %>%
+
+############
+
+# Now do the same but for the Sustained Clinical Response variable
+
+# Aggregate each group by Sustained_Clinical_Response_by_D29
+
+# For Standard of Care
+csort_median_soc_response <- standard_of_care_data %>%
+  group_by(Treatment_Arm, Sustained_Clinical_Response_by_D29, Cell_Type) %>%
+  summarise(Median_Percentage = median(Percentages, na.rm = TRUE), .groups = "drop")
+
+csort_normalized_soc_response <- csort_median_soc_response %>%
+  group_by(Treatment_Arm, Sustained_Clinical_Response_by_D29) %>%
+  mutate(Normalized_Percentage = Median_Percentage / sum(Median_Percentage) * 100)
+
+# For Bemcentinib
+csort_median_bemcentinib_response <- bemcentinib_data %>%
+  group_by(Treatment_Arm, Sustained_Clinical_Response_by_D29, Cell_Type) %>%
+  summarise(Median_Percentage = median(Percentages, na.rm = TRUE), .groups = "drop")
+
+csort_normalized_bemcentinib_response <- csort_median_bemcentinib_response %>%
+  group_by(Treatment_Arm, Sustained_Clinical_Response_by_D29) %>%
+  mutate(Normalized_Percentage = Median_Percentage / sum(Median_Percentage) * 100)
+
+# For Tozorakimab
+csort_median_tozorakimab_response <- tozorakimab_data %>%
+  group_by(Treatment_Arm, Sustained_Clinical_Response_by_D29, Cell_Type) %>%
+  summarise(Median_Percentage = median(Percentages, na.rm = TRUE), .groups = "drop")
+
+csort_normalized_tozorakimab_response <- csort_median_tozorakimab_response %>%
+  group_by(Treatment_Arm, Sustained_Clinical_Response_by_D29) %>%
+  mutate(Normalized_Percentage = Median_Percentage / sum(Median_Percentage) * 100)
+
+# For Zilucoplan
+csort_median_zilucoplan_response <- zilucoplan_data %>%
+  group_by(Treatment_Arm, Sustained_Clinical_Response_by_D29, Cell_Type) %>%
+  summarise(Median_Percentage = median(Percentages, na.rm = TRUE), .groups = "drop")
+
+csort_normalized_zilucoplan_response <- csort_median_zilucoplan_response %>%
+  group_by(Treatment_Arm, Sustained_Clinical_Response_by_D29) %>%
+  mutate(Normalized_Percentage = Median_Percentage / sum(Median_Percentage) * 100)
+
+# Recombine the  data into one dataset for Sustained Clinical Response
+csort_combined_response <- bind_rows(csort_normalized_soc_response, 
+                                     csort_normalized_bemcentinib_response,
+                                     csort_normalized_tozorakimab_response,
+                                     csort_normalized_zilucoplan_response)
+# Now use this for plotting
+# Standard of Care 
+standard_of_care_data_response <- csort_combined_response %>%
   filter(Treatment_Arm == "Standard of Care")
 
-ggplot(standard_of_care_data, aes(x = Sustained_Clinical_Response_by_D29, y = Normalized_Percentage, fill = Cell_Type)) +
+ggplot(standard_of_care_data_response, aes(x = Normalized_Percentage, y = Sustained_Clinical_Response_by_D29, fill = Cell_Type)) +
   geom_bar(stat = "identity", position="stack") +
-  labs(x = "Sustained Clinical Response", y = "Percentage", fill = "Cell Type") +
-  theme_bw(base_size = 14) +
+  labs(x = "Percentage", y = "Sustained Response", fill = "Cell Type") +
+  theme_bw(base_size = 16) +
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
-  theme(axis.text.x=element_text(size=14)) +
+  theme(axis.text.x=element_text(size=16)) +
+  theme(axis.ticks = element_blank()) +
+  scale_fill_manual(values=col_vector[c(1:3, 9:60)]) +
+  scale_x_continuous(expand = c(0,0), limits = c(0, 101)) +
+  guides(fill = guide_legend(ncol = 1))+ 
+  theme(legend.position = "none")
+
+# All 3 drugs
+drug_data_response<- csort_combined_response %>%
+  filter(Treatment_Arm != "Standard of Care")
+
+ggplot(drug_data_response, aes(x = Sustained_Clinical_Response_by_D29, y = Normalized_Percentage, fill = Cell_Type)) +
+  geom_bar(stat = "identity", position="stack") +
+  labs(x = "Sustained Response", y = "Percentage", fill = "Cell Type") +
+  theme_bw(base_size = 20) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.text.x=element_text(size=20)) +
   theme(axis.ticks = element_blank()) +
   scale_fill_manual(values=col_vector[c(1:3, 9:60)]) +
   scale_y_continuous(expand = c(0,0), limits = c(0, 101)) +
-  guides(fill = guide_legend(ncol = 1))
-
-
-
+  guides(fill = guide_legend(ncol = 1))+
+  facet_wrap(~Treatment_Arm)
 
 
 ```
